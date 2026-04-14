@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Sea Ports Search API Demo: /srtg/autc/SeaPortSearch</title>
+
+  <!-- ============================
+       FAVICON (browser tab)
+       ============================ -->
+  <link rel="icon" type="image/svg+xml" href="https://icons.navapi.cc/NavapiFaviconRed.svg" />
+
+  <!-- ============================
+       LEAFLET & MINIMAP STYLES
+       ============================ -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/maneoverland/leaflet.WorldMiniMap/dist/Control.WorldMiniMap.css" />
+
+  <!-- ============================
+       STYLES: Keep original look & feel
+       ============================ -->
+  <style>
+    :root { --item-height: 44px; } /* one row height; dropdown shows exactly 7 rows */
+
+    html, body { height: 100%; }
+
+    body {
+      font-family: Arial, sans-serif;
+      background: #272932; /* Dark background */
+      color: white;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      font-size: 16px;
+    }
+
+    /* Top header: logo + endpoint + search */
+    #top-container {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 20px;
+      flex-shrink: 0;
+    }
+    #logo { margin-bottom: 10px; width: 360px; }
+    #endpoint-heading { margin-bottom: 20px; font-size: 18px; color: #e5e5e5; }
+
+    /* Search bar & inline buttons */
+    #search-container {
+      position: relative;
+      width: 33%;
+      max-width: 450px;
+      min-width: 280px;
+      display: flex;
+      align-items: center;
+      margin-bottom: 0;
+    }
+    #search-input {
+      padding: 10px;
+      font-size: 16px;
+      width: 100%;
+      border: 1px solid #444;
+      border-radius: 3px;
+      background: #1f1f23;
+      color: white;
+      padding-right: 80px; /* space for icons */
+      box-sizing: border-box;
+    }
+    #api-btn, #clear-btn {
+      position: absolute;
+      top: 50%;
+      transform: translateY(-50%);
+      background: none;
+      border: none;
+      padding: 0;
+      line-height: 1;
+      cursor: pointer;
+    }
+    #api-btn { right: 40px; }
+    #clear-btn { right: 8px; }
+    #api-btn img, #clear-btn img { max-height: 24px; max-width: 24px; object-fit: contain; }
+
+    /* Autocomplete dropdown: exactly 7 rows visible; visible scrollbar */
+    #autocomplete-list {
+      position: absolute;
+      top: calc(100% + 12px);
+      left: 0;
+      background: #1f1f23;
+      border: 3px solid #aaa;
+      border-radius: 3px;
+      width: 100%;
+      max-height: calc(7 * var(--item-height));
+      overflow-y: auto;
+      z-index: 999;
+      display: none;
+    }
+    /* Thicker, more visible scrollbar */
+    #autocomplete-list::-webkit-scrollbar { width: 16px; background: #3a3a3a; }
+    #autocomplete-list::-webkit-scrollbar-thumb { background: #999; border-radius: 8px; border: 3px solid #666; }
+
+    #autocomplete-list .item {
+      height: var(--item-height);
+      padding: 0 10px;
+      display: flex;
+      align-items: center;
+      cursor: pointer;
+      font-size: 16px;
+      color: white;
+      border-bottom: 1px solid #888;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    #autocomplete-list .item:last-child { border-bottom: none; }
+    #autocomplete-list .item:nth-child(odd) { background: #2c2c34; }
+    #autocomplete-list .item:nth-child(even) { background: #1f1f23; }
+    #autocomplete-list .item:hover { background: rgba(169,235,218,0.3); }
+    #autocomplete-list .item.highlight { background: rgba(169,235,218,0.3) !important; }
+
+    /* Map container */
+    #map { flex: 1; width: 100%; margin-top: 0; position: relative; }
+    .leaflet-container { background: #ffffff; color: #000000; }
+
+    /* Left-bottom attribution badge (kept) */
+    #custom-attribution {
+      position: absolute;
+      bottom: 8px;
+      left: 8px;
+      background: rgba(255,255,255,0.7);
+      padding: 4px 8px;
+      border-radius: 3px;
+      display: flex;
+      align-items: center;
+      font-size: 14px;
+      color: #000;
+    }
+    #custom-attribution img { width: 20px; height: auto; margin-right: 6px; }
+
+    /* Bottom-right badge now uses your favicon per request */
+    #navapi-attribution-fixed {
+      position: fixed;
+      bottom: 8px;
+      right: 8px;
+      background: rgba(255,255,255,0.7);
+      padding: 4px 8px;
+      border-radius: 3px;
+      font-size: 14px;
+      color: #000;
+      z-index: 1000;
+      display: flex;
+      align-items: center;
+    }
+    #navapi-attribution-fixed img { width: 20px; height: auto; margin-right: 6px; }
+    #navapi-attribution-fixed a { color: #000; text-decoration: none; }
+
+    /* Popup theme (only if the user clicks the selected circle) */
+    .dark-popup .leaflet-popup-content-wrapper {
+      background: #272932 !important; color: #fff !important;
+      border: 1px solid #EF413D !important; box-shadow: none !important;
+    }
+    .dark-popup .leaflet-popup-content { margin: 5px 7px !important; line-height: 1.2em !important; font-size: 14px !important; }
+    .dark-popup .leaflet-popup-tip { background: #272932 !important; }
+    .dark-popup .leaflet-popup-content table { border-collapse: collapse; width: 100%; }
+    .dark-popup .leaflet-popup-content tr { margin: 0; padding: 0; }
+    .dark-popup .leaflet-popup-content td { margin: 0; padding: 2px 4px; vertical-align: top; }
+    .dark-popup .leaflet-popup-content tr:nth-child(odd) { background: #2c2c34; }
+    .dark-popup .leaflet-popup-content tr:nth-child(even) { background: #1f1f23; }
+    .dark-popup .leaflet-popup-content table td:first-child strong { color: #DCE0E2 !important; }
+  </style>
+</head>
+<body>
+  <!-- ============================
+       HEADER: Logo + Endpoint title + Search UI
+       ============================ -->
+  <div id="top-container">
+    <img id="logo" src="https://icons.navapi.cc/NavapiLogoWR1024.svg" alt="Navapi Logo"/>
+    <h2 id="endpoint-heading">GET : Endpoint → /srtg/autc/SeaPortSearch</h2>
+    <div id="search-container">
+      <input type="text" id="search-input" placeholder="Search Port by Name or UNLOCODE"/>
+      <button id="api-btn"><img src="https://icons.navapi.cc/ApiButton.svg" alt="API"/></button>
+      <button id="clear-btn"><img src="https://icons.navapi.cc/CloseButton.svg" alt="Close"/></button>
+      <div id="autocomplete-list"></div>
+    </div>
+  </div>
+
+  <!-- ============================
+       MAP CONTAINER
+       ============================ -->
+  <div id="map">
+    <div id="custom-attribution">
+      <img src="https://icons.navapi.cc/NavapiFaviconRed.svg" alt="icon" />
+      navapi.com
+    </div>
+  </div>
+
+  <!-- Bottom-right attribution with favicon -->
+  <div id="navapi-attribution-fixed">
+    <img src="https://icons.navapi.cc/NavapiFaviconRed.svg" alt="icon" />
+    <a href="https://navapi.com" target="_blank">navapi.com</a>
+  </div>
+
+  <!-- ============================
+       LEAFLET & MINIMAP SCRIPTS
+       ============================ -->
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <script src="https://cdn.jsdelivr.net/gh/maneoverland/leaflet.WorldMiniMap/dist/Control.WorldMiniMap.js"></script>
+
+  <!-- ============================
+       MAP INIT: ESRI basemap + Minimap
+       ============================ -->
+  <script>
+    // Create map first so later logic can use it safely
+    const map = L.map('map', { attributionControl: false }).setView([51.505, -0.09], 5);
+
+    // Main basemap: ESRI World Topo Map
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}', {
+      maxZoom: 19
+    }).addTo(map);
+
+    // Minimap: ESRI as well for consistency
+    const worldMiniMap = L.control.worldMiniMap({
+      position: 'bottomleft',
+      mapOptions: {
+        layers: [L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}', { maxZoom: 12 })]
+      }
+    });
+    worldMiniMap.addTo(map);
+  </script>
+
+  <!-- ============================
+       APP LOGIC: Config, Fetch, Autocomplete, Interaction, Markers
+       ============================ -->
+  <script>
+    // ----------------------------
+    // CONFIG & GLOBAL STATE
+    // ----------------------------
+    const API_URL = 'https://v1.navapi.pro/srtg/autc/SeaPortSearch';
+    const AUTH_TOKEN = 'Bearer 85662ae9e286c4ac365bff3037af188c1769696130860';
+
+    const searchInput = document.getElementById('search-input');
+    const clearBtn = document.getElementById('clear-btn');
+    const apiBtn = document.getElementById('api-btn');
+    const autocompleteList = document.getElementById('autocomplete-list');
+
+    let currentHighlightIndex = -1; // index in expandedResults
+    let expandedResults = [];       // flattened aliases
+
+    // Highlight preview circles (hover/arrow focus)
+    let previewOuter = null; // #272932 outer
+    let previewInner = null; // white center
+
+    // Selected port circles (on click/enter)
+    let selectedOuter = null; // #EF413D outer
+    let selectedInner = null; // white center
+    // Icon-based markers
+    let previewMarker = null;
+    let selectedMarker = null;
+
+    // Quick-clear counters
+    let backspaceCount = 0;
+    let deleteCount = 0;
+
+    // Abort controller to cancel stale fetches
+    let currentAbort = null;
+
+    // ----------------------------
+    // FLAG ICONS (3-letter ISO codes) — optional visual
+    // ----------------------------
+    const flagIcons = {"ABW":"https://flags.navapi.cc/ABW-ArubaFlag.svg","AFG":"https://flags.navapi.cc/AFG-AfghanistanFlag.svg","AGO":"https://flags.navapi.cc/AGO-AngolaFlag.svg","AIA":"https://flags.navapi.cc/AIA-AnguillaFlag.svg","ALA":"https://flags.navapi.cc/ALA-AlandIslandsFlag.svg","ALB":"https://flags.navapi.cc/ALB-AlbaniaFlag.svg","AND":"https://flags.navapi.cc/AND-AndorraFlag.svg","ARE":"https://flags.navapi.cc/ARE-UnitedArabEmiratesFlag.svg","ARG":"https://flags.navapi.cc/ARG-ArgentinaFlag.svg","ARM":"https://flags.navapi.cc/ARM-ArmeniaFlag.svg","ASM":"https://flags.navapi.cc/ASM-AmericanSamoaFlag.svg","ATG":"https://flags.navapi.cc/ATG-AntiguaAndBarbudaFlag.svg","AUS":"https://flags.navapi.cc/AUS-AustraliaFlag.svg","AUT":"https://flags.navapi.cc/AUT-AustriaFlag.svg","AZE":"https://flags.navapi.cc/AZE-AzerbaijanFlag.svg","BDI":"https://flags.navapi.cc/BDI-BurundiFlag.svg","BEL":"https://flags.navapi.cc/BEL-BelgiumFlag.svg","BEN":"https://flags.navapi.cc/BEN-BeninFlag.svg","BES":"https://flags.navapi.cc/BES-BonaireFlag.svg","BFA":"https://flags.navapi.cc/BFA-BurkinaFasoFlag.svg","BGD":"https://flags.navapi.cc/BGD-BangladeshFlag.svg","BGR":"https://flags.navapi.cc/BGR-BulgariaFlag.svg","BHR":"https://flags.navapi.cc/BHR-BahrainFlag.svg","BHS":"https://flags.navapi.cc/BHS-BahamasFlag.svg","BIH":"https://flags.navapi.cc/BIH-BosniaAndHerzegovinaFlag.svg","BLM":"https://flags.navapi.cc/BLM-SaintBarthelemyFlag.svg","BLR":"https://flags.navapi.cc/BLR-BelarusFlag.svg","BLZ":"https://flags.navapi.cc/BLZ-BelizeFlag.svg","BMU":"https://flags.navapi.cc/BMU-BermudaFlag.svg","BOL":"https://flags.navapi.cc/BOL-BoliviaFlag.svg","BRA":"https://flags.navapi.cc/BRA-BrazilFlag.svg","BRB":"https://flags.navapi.cc/BRB-BarbadosFlag.svg","BRN":"https://flags.navapi.cc/BRN-BruneiFlag.svg","BTN":"https://flags.navapi.cc/BTN-BhutanFlag.svg","BWA":"https://flags.navapi.cc/BWA-BotswanaFlag.svg","CAF":"https://flags.navapi.cc/CAF-CentralAfricanRepublicFlag.svg","CAN":"https://flags.navapi.cc/CAN-CanadaFlag.svg","CCK":"https://flags.navapi.cc/CCK-CocosIslandsFlag.svg","CHE":"https://flags.navapi.cc/CHE-SwitzerlandFlag.svg","CHL":"https://flags.navapi.cc/CHL-ChileFlag.svg","CHN":"https://flags.navapi.cc/CHN-ChinaFlag.svg","CIV":"https://flags.navapi.cc/CIV-IvoryCoastFlag.svg","CMR":"https://flags.navapi.cc/CMR-CameroonFlag.svg","COD":"https://flags.navapi.cc/COD-DemocraticRepublicOfCongoFlag.svg","COG":"https://flags.navapi.cc/COG-RepublicOfTheCongoFlag.svg","COK":"https://flags.navapi.cc/COK-CookIslandsFlag.svg","COL":"https://flags.navapi.cc/COL-ColombiaFlag.svg","COM":"https://flags.navapi.cc/COM-ComorosFlag.svg","CPV":"https://flags.navapi.cc/CPV-CapeVerdeFlag.svg","CRI":"https://flags.navapi.cc/CRI-CostaRicaFlag.svg","CUB":"https://flags.navapi.cc/CUB-CubaFlag.svg","CUW":"https://flags.navapi.cc/CUW-CuracaoFlag.svg","CXR":"https://flags.navapi.cc/CXR-ChristmasIslandFlag.svg","CYM":"https://flags.navapi.cc/CYM-CaymanIslandsFlag.svg","CYP":"https://flags.navapi.cc/CYP-CyprusFlag.svg","CZE":"https://flags.navapi.cc/CZE-CzechRepublicFlag.svg","DEU":"https://flags.navapi.cc/DEU-GermanyFlag.svg","DJI":"https://flags.navapi.cc/DJI-DjiboutiFlag.svg","DMA":"https://flags.navapi.cc/DMA-DominicaFlag.svg","DNK":"https://flags.navapi.cc/DNK-DenmarkFlag.svg","DOM":"https://flags.navapi.cc/DOM-DominicanRepublicFlag.svg","DZA":"https://flags.navapi.cc/DZA-AlgeriaFlag.svg","ECU":"https://flags.navapi.cc/ECU-EcuadorFlag.svg","EGY":"https://flags.navapi.cc/EGY-EgyptFlag.svg","ERI":"https://flags.navapi.cc/ERI-EritreaFlag.svg","ESP":"https://flags.navapi.cc/ESP-SpainFlag.svg","EST":"https://flags.navapi.cc/EST-EstoniaFlag.svg","ETH":"https://flags.navapi.cc/ETH-EthiopiaFlag.svg","FIN":"https://flags.navapi.cc/FIN-FinlandFlag.svg","FJI":"https://flags.navapi.cc/FJI-FijiFlag.svg","FLK":"https://flags.navapi.cc/FLK-FalklandIslandsFlag.svg","FRA":"https://flags.navapi.cc/FRA-FranceFlag.svg","FRO":"https://flags.navapi.cc/FRO-FaroeIslandsFlag.svg","FSM":"https://flags.navapi.cc/FSM-MicronesiaFlag.svg","GAB":"https://flags.navapi.cc/GAB-GabonFlag.svg","GBR":"https://flags.navapi.cc/GBR-UnitedKingdomFlag.svg","GEO":"https://flags.navapi.cc/GEO-GeorgiaFlag.svg","GGY":"https://flags.navapi.cc/GGY-GuernseyFlag.svg","GHA":"https://flags.navapi.cc/GHA-GhanaFlag.svg","GIB":"https://flags.navapi.cc/GIB-GibraltarFlag.svg","GIN":"https://flags.navapi.cc/GIN-GuineaFlag.svg","GMB":"https://flags.navapi.cc/GMB-GambiaFlag.svg","GNB":"https://flags.navapi.cc/GNB-GuineaBissauFlag.svg","GNQ":"https://flags.navapi.cc/GNQ-EquatorialGuineaFlag.svg","GRC":"https://flags.navapi.cc/GRC-GreeceFlag.svg","GRD":"https://flags.navapi.cc/GRD-GrenadaFlag.svg","GRL":"https://flags.navapi.cc/GRL-GreenlandFlag.svg","GTM":"https://flags.navapi.cc/GTM-GuatemalaFlag.svg","GUM":"https://flags.navapi.cc/GUM-GuamFlag.svg","HKG":"https://flags.navapi.cc/HKG-HongKongFlag.svg","HND":"https://flags.navapi.cc/HND-HondurasFlag.svg","HRV":"https://flags.navapi.cc/HRV-CroatiaFlag.svg","HTI":"https://flags.navapi.cc/HTI-HaitiFlag.svg","HUN":"https://flags.navapi.cc/HUN-HungaryFlag.svg","IDN":"https://flags.navapi.cc/IDN-IndonesiaFlag.svg","IMN":"https://flags.navapi.cc/IMN-IsleOfManFlag.svg","IND":"https://flags.navapi.cc/IND-IndiaFlag.svg","IOT":"https://flags.navapi.cc/IOT-BritishIndianOceanTerritoryFlag.svg","IRL":"https://flags.navapi.cc/IRL-IrelandFlag.svg","IRN":"https://flags.navapi.cc/IRN-IranFlag.svg","IRQ":"https://flags.navapi.cc/IRQ-IraqFlag.svg","ISL":"https://flags.navapi.cc/ISL-IcelandFlag.svg","ISR":"https://flags.navapi.cc/ISR-IsraelFlag.svg","ITA":"https://flags.navapi.cc/ITA-ItalyFlag.svg","JAM":"https://flags.navapi.cc/JAM-JamaicaFlag.svg","JEY":"https://flags.navapi.cc/JEY-JerseyFlag.svg","JOR":"https://flags.navapi.cc/JOR-JordanFlag.svg","JPN":"https://flags.navapi.cc/JPN-JapanFlag.svg","KAZ":"https://flags.navapi.cc/KAZ-KazakhstanFlag.svg","KEN":"https://flags.navapi.cc/KEN-KenyaFlag.svg","KGZ":"https://flags.navapi.cc/KGZ-KyrgyzstanFlag.svg","KHM":"https://flags.navapi.cc/KHM-CambodiaFlag.svg","KIR":"https://flags.navapi.cc/KIR-KiribatiFlag.svg","KNA":"https://flags.navapi.cc/KNA-SaintKittsAndNevisFlag.svg","KOR":"https://flags.navapi.cc/KOR-SouthKoreaFlag.svg","KWT":"https://flags.navapi.cc/KWT-KuwaitFlag.svg","LAO":"https://flags.navapi.cc/LAO-LaosFlag.svg","LBN":"https://flags.navapi.cc/LBN-LebanonFlag.svg","LBR":"https://flags.navapi.cc/LBR-LiberiaFlag.svg","LBY":"https://flags.navapi.cc/LBY-LibyaFlag.svg","LCA":"https://flags.navapi.cc/LCA-StLuciaFlag.svg","LIE":"https://flags.navapi.cc/LIE-LiechtensteinFlag.svg","LKA":"https://flags.navapi.cc/LKA-SriLankaFlag.svg","LSO":"https://flags.navapi.cc/LSO-LesothoFlag.svg","LTU":"https://flags.navapi.cc/LTU-LithuaniaFlag.svg","LUX":"https://flags.navapi.cc/LUX-LuxembourgFlag.svg","LVA":"https://flags.navapi.cc/LVA-LatviaFlag.svg","MAC":"https://flags.navapi.cc/MAC-MacaoFlag.svg","MAR":"https://flags.navapi.cc/MAR-MoroccoFlag.svg","MCO":"https://flags.navapi.cc/MCO-MonacoFlag.svg","MDA":"https://flags.navapi.cc/MDA-MoldovaFlag.svg","MDG":"https://flags.navapi.cc/MDG-MadagascarFlag.svg","MDV":"https://flags.navapi.cc/MDV-MaldivesFlag.svg","MEX":"https://flags.navapi.cc/MEX-MexicoFlag.svg","MHL":"https://flags.navapi.cc/MHL-MarshallIslandsFlag.svg","MKD":"https://flags.navapi.cc/MKD-NorthMacedoniaFlag.svg","MLI":"https://flags.navapi.cc/MLI-MaliFlag.svg","MLT":"https://flags.navapi.cc/MLT-MaltaFlag.svg","MMR":"https://flags.navapi.cc/MMR-MyanmarFlag.svg","MNE":"https://flags.navapi.cc/MNE-MontenegroFlag.svg","MNG":"https://flags.navapi.cc/MNG-MongoliaFlag.svg","MNP":"https://flags.navapi.cc/MNP-NorthernMarianaIslandsFlag.svg","MOZ":"https://flags.navapi.cc/MOZ-MozambiqueFlag.svg","MRT":"https://flags.navapi.cc/MRT-MauritaniaFlag.svg","MSR":"https://flags.navapi.cc/MSR-MontserratFlag.svg","MTQ":"https://flags.navapi.cc/MTQ-MartiniqueFlag.svg","MUS":"https://flags.navapi.cc/MUS-MauritiusFlag.svg","MWI":"https://flags.navapi.cc/MWI-MalawiFlag.svg","MYS":"https://flags.navapi.cc/MYS-MalaysiaFlag.svg","NAM":"https://flags.navapi.cc/NAM-NamibiaFlag.svg","NER":"https://flags.navapi.cc/NER-NigerFlag.svg","NFK":"https://flags.navapi.cc/NFK-NorfolkIslandFlag.svg","NGA":"https://flags.navapi.cc/NGA-NigeriaFlag.svg","NIC":"https://flags.navapi.cc/NIC-NicaraguaFlag.svg","NIU":"https://flags.navapi.cc/NIU-NiueFlag.svg","NLD":"https://flags.navapi.cc/NLD-NetherlandsFlag.svg","NOR":"https://flags.navapi.cc/NOR-NorwayFlag.svg","NPL":"https://flags.navapi.cc/NPL-NepalFlag.svg","NRU":"https://flags.navapi.cc/NRU-NauruFlag.svg","NZL":"https://flags.navapi.cc/NZL-NewZealandFlag.svg","OMN":"https://flags.navapi.cc/OMN-OmanFlag.svg","PAK":"https://flags.navapi.cc/PAK-PakistanFlag.svg","PAN":"https://flags.navapi.cc/PAN-PanamaFlag.svg","PCN":"https://flags.navapi.cc/PCN-PitcairnIslandsFlag.svg","PER":"https://flags.navapi.cc/PER-PeruFlag.svg","PHL":"https://flags.navapi.cc/PHL-PhilippinesFlag.svg","PLW":"https://flags.navapi.cc/PLW-PalauFlag.svg","PNG":"https://flags.navapi.cc/PNG-PapuaNewGuineaFlag.svg","POL":"https://flags.navapi.cc/POL-PolandFlag.svg","PRI":"https://flags.navapi.cc/PRI-PuertoRicoFlag.svg","PRK":"https://flags.navapi.cc/PRK-NorthKoreaFlag.svg","PRT":"https://flags.navapi.cc/PRT-PortugalFlag.svg","PRY":"https://flags.navapi.cc/PRY-ParaguayFlag.svg","PSE":"https://flags.navapi.cc/PSE-PalestineFlag.svg","PYF":"https://flags.navapi.cc/PYF-FrenchPolynesiaFlag.svg","QAT":"https://flags.navapi.cc/QAT-QatarFlag.svg","ROM":"https://flags.navapi.cc/ROM-RomaniaFlag.svg","RUS":"https://flags.navapi.cc/RUS-RussiaFlag.svg","RWA":"https://flags.navapi.cc/RWA-RwandaFlag.svg","SAU":"https://flags.navapi.cc/SAU-SaudiArabiaFlag.svg","SDN":"https://flags.navapi.cc/SDN-SudanFlag.svg","SEN":"https://flags.navapi.cc/SEN-SenegalFlag.svg","SGP":"https://flags.navapi.cc/SGP-SingaporeFlag.svg","SLB":"https://flags.navapi.cc/SLB-SolomonIslandsFlag.svg","SLE":"https://flags.navapi.cc/SLE-SierraLeoneFlag.svg","SLV":"https://flags.navapi.cc/SLV-ElSalvadorFlag.svg","SMR":"https://flags.navapi.cc/SMR-SanMarinoFlag.svg","SOM":"https://flags.navapi.cc/SOM-SomaliaFlag.svg","SRB":"https://flags.navapi.cc/SRB-SerbiaFlag.svg","SSD":"https://flags.navapi.cc/SSD-SouthSudanFlag.svg","STP":"https://flags.navapi.cc/STP-SaoTomeAndPrincipeFlag.svg","SUR":"https://flags.navapi.cc/SUR-SurinameFlag.svg","SVK":"https://flags.navapi.cc/SVK-SlovakiaFlag.svg","SVN":"https://flags.navapi.cc/SVN-SloveniaFlag.svg","SWE":"https://flags.navapi.cc/SWE-SwedenFlag.svg","SWZ":"https://flags.navapi.cc/SWZ-EswatiniFlag.svg","SXM":"https://flags.navapi.cc/SXM-SintMaartenFlag.svg","SYC":"https://flags.navapi.cc/SYC-SeychellesFlag.svg","SYR":"https://flags.navapi.cc/SYR-SyriaFlag.svg","TCA":"https://flags.navapi.cc/TCA-TurksAndCaicosFlag.svg","TCD":"https://flags.navapi.cc/TCD-ChadFlag.svg","TGO":"https://flags.navapi.cc/TGO-TogoFlag.svg","THA":"https://flags.navapi.cc/THA-ThailandFlag.svg","TJK":"https://flags.navapi.cc/TJK-TajikistanFlag.svg","TKL":"https://flags.navapi.cc/TKL-TokelauFlag.svg","TKM":"https://flags.navapi.cc/TKM-TurkmenistanFlag.svg","TLS":"https://flags.navapi.cc/TLS-EastTimorFlag.svg","TON":"https://flags.navapi.cc/TON-TongaFlag.svg","TTO":"https://flags.navapi.cc/TTO-TrinidadAndTobagoFlag.svg","TUN":"https://flags.navapi.cc/TUN-TunisiaFlag.svg","TUR":"https://flags.navapi.cc/TUR-TurkeyFlag.svg","TUV":"https://flags.navapi.cc/TUV-TuvaluFlag.svg","TWN":"https://flags.navapi.cc/TWN-TaiwanFlag.svg","TZA":"https://flags.navapi.cc/TZA-TanzaniaFlag.svg","UGA":"https://flags.navapi.cc/UGA-UgandaFlag.svg","UKR":"https://flags.navapi.cc/UKR-UkraineFlag.svg","URY":"https://flags.navapi.cc/URY-UruguayFlag.svg","USA":"https://flags.navapi.cc/USA-UnitedStatesFlag.svg","UZB":"https://flags.navapi.cc/UZB-UzbekistanFlag.svg","VAT":"https://flags.navapi.cc/VAT-VaticanCityFlag.svg","VCT":"https://flags.navapi.cc/VCT-StVincentAndTheGrenadinesFlag.svg","VEN":"https://flags.navapi.cc/VEN-VenezuelaFlag.svg","VGB":"https://flags.navapi.cc/VGB-BritishVirginIslandsFlag.svg","VIR":"https://flags.navapi.cc/VIR-VirginIslandsFlag.svg","VNM":"https://flags.navapi.cc/VNM-VietnamFlag.svg","VUT":"https://flags.navapi.cc/VUT-VanuatuFlag.svg","WSM":"https://flags.navapi.cc/WSM-SamoaFlag.svg","XABK":"https://flags.navapi.cc/XABK-AbkhaziaFlag.svg","XAZR":"https://flags.navapi.cc/XAZR-AzoresIslandsFlag.svg","XBLR":"https://flags.navapi.cc/XBLR-BalearicIslandsFlag.svg","XBRC":"https://flags.navapi.cc/XBRC-BritishColumbiaFlag.svg","XBSQ":"https://flags.navapi.cc/XBSQ-BasqueCountryFlag.svg","XCAN":"https://flags.navapi.cc/XCAN-CanaryIslandsFlag.svg","XCEU":"https://flags.navapi.cc/XCEU-CeutaFlag.svg","XCOR":"https://flags.navapi.cc/XCOR-CorsicaFlag.svg","XENG":"https://flags.navapi.cc/XENG-EnglandFlag.svg","XEUR":"https://flags.navapi.cc/XEUR-EuropeanUnionFlag.svg","XEUS":"https://flags.navapi.cc/XEUS-SintEustatiusFlag.svg","XGLP":"https://flags.navapi.cc/XGLP-GalapagosIslandsFlag.svg","XHAW":"https://flags.navapi.cc/XHAW-HawaiiFlag.svg","XKOS":"https://flags.navapi.cc/XKOS-KosovoFlag.svg","XMDR":"https://flags.navapi.cc/XMDR-MadeiraFlag.svg","XMEL":"https://flags.navapi.cc/XMEL-MelillaFlag.svg","XNCY":"https://flags.navapi.cc/XNCY-NorthernCyprusFlag.svg","XNTO":"https://flags.navapi.cc/XNTO-NatoFlag.svg","XOCE":"https://flags.navapi.cc/XOCE-OssetiaFlag.svg","XRPN":"https://flags.navapi.cc/XRPN-RapaNuiFlag.svg","XSAH":"https://flags.navapi.cc/XSAH-SahrawiArabDemocraticRepublicFlag.svg","XSCL":"https://flags.navapi.cc/XSCL-SicilyFlag.svg","XSCT":"https://flags.navapi.cc/XSCT-ScotlandFlag.svg","XSLB":"https://flags.navapi.cc/XSLB-SabaIslandFlag.svg","XSOM":"https://flags.navapi.cc/XSOM-SomalilandFlag.svg","XSRD":"https://flags.navapi.cc/XSRD-SardiniaFlag.svg","XTBT":"https://flags.navapi.cc/XTBT-TibetFlag.svg","XTRS":"https://flags.navapi.cc/XTRS-TransnistriaFlag.svg","XUNA":"https://flags.navapi.cc/XUNA-UnitedNationsFlag.svg","XWLS":"https://flags.navapi.cc/XWLS-WalesFlag.svg","YEM":"https://flags.navapi.cc/YEM-YemenFlag.svg","ZAF":"https://flags.navapi.cc/ZAF-SouthAfricaFlag.svg","ZMB":"https://flags.navapi.cc/ZMB-ZambiaFlag.svg","ZWE":"https://flags.navapi.cc/ZWE-ZimbabweFlag.svg"};
+
+    // ----------------------------
+    // FETCHING & SHAPING RESULTS
+    // ----------------------------
+    async function fetchPorts(query) {
+      // Cancel previous request (if any)
+      if (currentAbort) currentAbort.abort();
+
+      const controller = new AbortController();
+      currentAbort = controller;
+
+      const url = `${API_URL}?q=${encodeURIComponent(query)}`;
+      const response = await fetch(url, {
+        headers: { 'Authorization': AUTH_TOKEN },
+        signal: controller.signal
+      });
+
+      if (!response.ok) throw new Error('Network response was not ok');
+
+      const json = await response.json();
+      const arr = (json && json.ApiResults && Array.isArray(json.ApiResults.autc_SeaPortSearch))
+        ? json.ApiResults.autc_SeaPortSearch : [];
+
+      // mark request done if this is the latest controller
+      if (currentAbort === controller) currentAbort = null;
+
+      return arr;
+    }
+
+    // Expand PortName aliases split by '/' and carry trailing parentheses e.g., "(Oregon)"
+    function explodeAliases(port) {
+      const name = port.PortName || 'Unknown';
+      const trailing = name.match(/\s*(\([^()]*\))\s*$/);  // capture "(...)" at end
+      const suffix = trailing ? ` ${trailing[1]}` : '';
+      const base = trailing ? name.slice(0, trailing.index).trim() : name.trim();
+      const parts = base.split('/').map(s => s.trim()).filter(Boolean);
+      const uniq = Array.from(new Set(parts));
+      return uniq.map(alias => {
+        const displayHasParen = /\([^()]*\)\s*$/.test(alias);
+        return {
+          displayName: displayHasParen ? alias : (alias + suffix),
+          Country: port.Country,
+          PortCode: port.PortCode,
+          Latitude: port.Latitude,
+          Longitude: port.Longitude
+        };
+      });
+    }
+
+    function buildExpandedResults(rawPorts){
+      const out = [];
+      rawPorts.forEach(p => explodeAliases(p).forEach(a => out.push(a)));
+      return out;
+    }
+
+    // ----------------------------
+    // AUTOCOMPLETE RENDERING & UX
+    // ----------------------------
+    function renderAutocomplete(items){
+      autocompleteList.innerHTML = '';
+      if (!items.length){ hideAutocomplete(); return; }
+      currentHighlightIndex = -1; // do not auto-sticky highlight the first row
+
+      items.forEach((r, idx) => {
+        const div = document.createElement('div');
+        div.className = 'item';
+        div.setAttribute('data-index', idx);
+
+        // Optional flag icon; always show [COUNTRY] + name
+        const flagURL = flagIcons[r.Country] || '';
+        const flagImg = flagURL ? `<img src="${flagURL}" alt="${r.Country}" style="height:16px;width:auto;margin-right:6px;">` : '';
+        div.innerHTML = `${flagImg}[${r.Country}] ${escapeHtml(r.displayName)}`;
+
+        // Hover: move highlight + center map + show preview circle
+        div.addEventListener('mouseenter', () => highlightItem(idx, true));
+        // Click: select
+        div.addEventListener('click', () => selectResult(idx));
+
+        autocompleteList.appendChild(div);
+      });
+      autocompleteList.style.display = 'block';
+    }
+
+    function hideAutocomplete(){
+      autocompleteList.style.display = 'none';
+      autocompleteList.innerHTML = '';
+      currentHighlightIndex = -1;
+    }
+
+    function highlightItem(index, centerMapToo=false){
+      const items = autocompleteList.querySelectorAll('.item');
+      items.forEach(i => i.classList.remove('highlight'));
+      if (index >=0 && index < items.length){
+        items[index].classList.add('highlight');
+        currentHighlightIndex = index;
+        const r = expandedResults[index];
+        if (centerMapToo && r){
+          map.setView([r.Latitude, r.Longitude], map.getZoom(), { animate: true });
+          showPreviewCircle(r);
+        }
+      }
+    }
+
+    function navigateAutocomplete(direction){
+      const items = autocompleteList.querySelectorAll('.item');
+      if (!items.length) return;
+      let newIndex = currentHighlightIndex;
+      newIndex = (newIndex < 0) ? 0 : newIndex + direction;
+      if (newIndex < 0) newIndex = items.length - 1;
+      if (newIndex >= items.length) newIndex = 0;
+      highlightItem(newIndex, true);
+      items[newIndex].scrollIntoView({ block: 'nearest' });
+    }
+
+    function selectResult(idx){
+      const r = expandedResults[idx];
+      if (!r) return;
+      hideAutocomplete();
+      searchInput.value = r.displayName;
+      clearPreviewCircle();
+      showSelectedPort(r);
+    }
+
+    // ----------------------------
+    // MARKERS: preview (#272932) & selected (#EF413D), both solid with white center
+    // ----------------------------
+    function clearPreviewCircle(){
+      if (previewOuter){ previewOuter.remove(); previewOuter = null; }
+      if (previewInner){ previewInner.remove(); previewInner = null; }
+      if (previewMarker){ map.removeLayer(previewMarker); previewMarker = null; }
+}
+    function clearSelectedCircle(){
+      if (selectedOuter){ selectedOuter.remove(); selectedOuter = null; }
+      if (selectedInner){ selectedInner.remove(); selectedInner = null; }
+      if (selectedMarker){ map.removeLayer(selectedMarker); selectedMarker = null; }
+}
+
+    function showPreviewCircle(r){
+      clearPreviewCircle();
+      const inactiveIcon = L.icon({
+        iconUrl: 'https://icons.navapi.cc/LocationInactive.svg',
+        iconSize: [32, 32],
+        iconAnchor: [16, 32],
+        popupAnchor: [0, -28]
+      });
+      previewMarker = L.marker([r.Latitude, r.Longitude], { icon: inactiveIcon, keyboard: false }).addTo(map);
+      if (selectedMarker) { try { previewMarker.bringToBack(); } catch(e){} }
+}
+
+    function showSelectedPort(r){
+      clearSelectedCircle();
+      const activeIcon = L.icon({
+        iconUrl: 'https://icons.navapi.cc/LocationActive.svg',
+        iconSize: [34, 34],
+        iconAnchor: [17, 34],
+        popupAnchor: [0, -30]
+      });
+      selectedMarker = L.marker([r.Latitude, r.Longitude], { icon: activeIcon, keyboard: false }).addTo(map);
+
+      const popupHtml = `
+        <table>
+          <tr><td><strong>Port:</strong></td><td>${escapeHtml(r.displayName)}</td></tr>
+          <tr><td><strong>Country:</strong></td><td>${escapeHtml(r.Country || 'N/A')}</td></tr>
+          <tr><td><strong>UN/LOCODE:</strong></td><td>${escapeHtml(r.PortCode || 'N/A')}</td></tr>
+          <tr><td><strong>Latitude:</strong></td><td>${Number(r.Latitude).toFixed(6)}</td></tr>
+          <tr><td><strong>Longitude:</strong></td><td>${Number(r.Longitude).toFixed(6)}</td></tr>
+        </table>`;
+      try { selectedMarker.bindPopup(popupHtml, { className: 'dark-popup' }); } catch(e){}
+
+      map.setView([r.Latitude, r.Longitude], Math.max(map.getZoom(), 8));
+}
+
+    // ----------------------------
+    // HELPERS
+    // ----------------------------
+    function escapeHtml(str){
+      return String(str).replace(/[&<>"']/g, s => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s]));
+    }
+    function clearSearch(){
+      searchInput.value = '';
+      hideAutocomplete();
+      clearPreviewCircle();
+      clearSelectedCircle();
+
+      // cancel any in-flight request
+      if (currentAbort) { currentAbort.abort(); currentAbort = null; }
+
+      backspaceCount = 0;
+      deleteCount = 0;
+    }
+
+    // ----------------------------
+    // EVENTS: input typing, keys, buttons
+    // ----------------------------
+    searchInput.addEventListener('input', async () => {
+      const q = searchInput.value.trim();
+
+      // If fewer than 3 chars, hide & cancel any in-flight request
+      if (q.length < 3) {
+        hideAutocomplete();
+        clearPreviewCircle();
+        if (currentAbort) { currentAbort.abort(); currentAbort = null; }
+        return;
+      }
+
+      try {
+        const rawPorts = await fetchPorts(q);
+        expandedResults = buildExpandedResults(rawPorts);
+        renderAutocomplete(expandedResults);
+      } catch (e) {
+        if (e.name !== 'AbortError') {
+          console.error(e);
+          hideAutocomplete();
+        }
+      }
+    });
+
+    clearBtn.addEventListener('click', clearSearch);
+    apiBtn.addEventListener('click', () => {
+      if (!expandedResults.length) return;
+      const idx = (currentHighlightIndex >= 0) ? currentHighlightIndex : 0;
+      selectResult(idx);
+    });
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape'){ e.preventDefault(); clearSearch(); return; }
+      if (e.key === 'ArrowDown'){ e.preventDefault(); navigateAutocomplete(1); return; }
+      if (e.key === 'ArrowUp'){ e.preventDefault(); navigateAutocomplete(-1); return; }
+      if (e.key === 'Enter'){
+        e.preventDefault();
+        if (!expandedResults.length) return;
+        const idx = (currentHighlightIndex >= 0) ? currentHighlightIndex : 0;
+        selectResult(idx);
+        return;
+      }
+
+      if (e.key === 'Backspace'){
+        backspaceCount++;
+        if (backspaceCount >= 4) { clearSearch(); }
+        return; // let default text deletion happen; input handler will see empty state
+      }
+      if (e.key === 'Delete'){
+        deleteCount++;
+        if (deleteCount >= 4) { clearSearch(); }
+        return;
+      }
+
+      // Any other key resets the quick-clear counters
+      backspaceCount = 0;
+      deleteCount = 0;
+    });
+  </script>
+
+</body>
+</html>

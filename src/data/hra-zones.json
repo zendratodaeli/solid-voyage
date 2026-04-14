@@ -1,0 +1,111 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Gulf of Aden HRA",
+        "id": "gulf_of_aden",
+        "type": "piracy",
+        "warning": "Route passes through Gulf of Aden High Risk Area. Additional War Risk Insurance may apply."
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[
+          [41.0, 11.0],
+          [41.0, 23.0],
+          [78.0, 23.0],
+          [78.0, -3.0],
+          [60.0, -3.0],
+          [55.0, 5.0],
+          [48.0, 8.0],
+          [43.0, 11.0],
+          [41.0, 11.0]
+        ]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "West Africa HRA",
+        "id": "west_africa",
+        "type": "piracy",
+        "warning": "Route passes through West Africa High Risk Area. Additional War Risk Insurance may apply."
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[
+          [-5.0, 12.0],
+          [-5.0, -3.0],
+          [10.0, -3.0],
+          [10.0, 7.0],
+          [5.0, 12.0],
+          [-5.0, 12.0]
+        ]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Gulf of Guinea Extended",
+        "id": "gulf_of_guinea",
+        "type": "piracy",
+        "warning": "Route passes through Gulf of Guinea Extended Risk Area. High piracy activity — report to MDAT-GoG before entering. Armed robbery and kidnapping risk."
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[
+          [-10.0, 15.0],
+          [-10.0, -5.0],
+          [15.0, -5.0],
+          [15.0, 5.0],
+          [12.0, 8.0],
+          [5.0, 12.0],
+          [0.0, 15.0],
+          [-10.0, 15.0]
+        ]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Strait of Malacca HRA",
+        "id": "malacca",
+        "type": "piracy",
+        "warning": "Route passes through Strait of Malacca. Exercise caution and report to authorities."
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[
+          [95.0, 6.0],
+          [95.0, 0.5],
+          [105.0, 0.5],
+          [105.0, 2.0],
+          [104.0, 4.0],
+          [100.0, 6.0],
+          [95.0, 6.0]
+        ]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "South America / Caribbean",
+        "id": "south_america_caribbean",
+        "type": "piracy",
+        "warning": "Route passes through South America / Caribbean advisory area. Petty theft and opportunistic boarding at anchorages."
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[
+          [-85.0, 15.0],
+          [-85.0, 5.0],
+          [-60.0, 5.0],
+          [-55.0, 10.0],
+          [-60.0, 15.0],
+          [-85.0, 15.0]
+        ]]
+      }
+    }
+  ]
+}

@@ -1,0 +1,1070 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>AISP: /mvsl/FindByDestination</title>
+<link rel="icon" type="image/svg+xml" href="https://general-icons.navapi.cc/NavapiFavicon.svg" />
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" />
+
+<style>
+  html, body {
+    height: 100%;
+  }
+
+  body {
+    font-family: Arial, sans-serif;
+    background: #272932; /* Dark background */
+    color: white;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    font-size: 16px;
+    text-align: center;
+  }
+
+  #top-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 20px;
+    flex-shrink: 0;
+    position: relative;
+  }
+
+  #logo {
+    margin-bottom: 10px;
+    width: 360px;
+  }
+
+  #endpoint-heading {
+    margin-bottom: 20px;
+    font-size: 16px;
+    color: #E5E5E5;
+  }
+
+  #search-container {
+    position: relative;
+    width: 38%;
+    max-width: 450px;
+    min-width: 280px;
+    display: flex;
+    align-items: center;
+    margin: 0 auto;
+  }
+
+  #search-input {
+    padding: 10px; 
+    font-size: 16px; 
+    width: 100%;
+    border: 1px solid #444;
+    border-radius: 3px;
+    background: #1f1f23;
+    color: white;
+    padding-right: 140px; 
+    box-sizing: border-box;
+  }
+
+  #search-input::placeholder {
+    font-size: 14px; 
+  }
+
+  #api-btn {
+    position: absolute;
+    right: 108px; 
+    top: 50%;
+    transform: translateY(-50%);
+    background: none;
+    border: none;
+    cursor: pointer;
+  }
+
+  #api-btn img {
+    width: 26px;
+    height: 26px;
+    object-fit: contain;
+  }
+
+  #calendar-btn {
+    position: absolute;
+    right: 76px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: none; 
+    border: none;
+    padding: 0;
+    line-height: 1;
+    cursor: pointer;
+    border-radius: 3px;
+  }
+
+  #calendar-btn img {
+    width: 26px;
+    height: 26px;
+    object-fit: contain;
+    display: block;
+  }
+
+  #shiptype-btn {
+    position: absolute;
+    right: 44px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: none; 
+    border: none;
+    padding: 0;
+    line-height: 1;
+    cursor: pointer;
+    border-radius: 3px;
+  }
+
+  #shiptype-btn img {
+    width: 26px;
+    height: 26px;
+    object-fit: contain;
+    display: block;
+  }
+
+  #clear-btn {
+    position: absolute;
+    right: 8px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: none; 
+    border: none;
+    padding: 0;
+    line-height: 1;
+    cursor: pointer;
+  }
+
+  #clear-btn img {
+    width: 26px;
+    height: 26px;
+    object-fit: contain;
+  }
+
+  #results {
+    width: 100%;
+    max-width: 450px;
+    margin-top: 20px;
+    color: #EF413D;
+    text-align: center;
+    margin: 20px auto 0 auto; 
+  }
+
+  #map {
+    flex: 1;
+    width: 100%;
+    margin-top: 0; 
+    position: relative;
+  }
+
+  .leaflet-container {
+    background: #ffffff;
+    color: #000000;
+  }
+
+  #custom-attribution {
+    position: absolute;
+    bottom: 8px;
+    left: 8px;
+    background: rgba(255,255,255,0.7);
+    padding: 4px 8px;
+    border-radius: 3px;
+    display: flex;
+    align-items: center;
+    font-size: 14px;
+    color: #000;
+  }
+
+  #custom-attribution img {
+    width: 20px;
+    height: auto;
+    margin-right: 6px;
+  }
+
+  #navapi-attribution-fixed {
+    position: fixed;
+    bottom: 8px;
+    right: 8px;
+    background: rgba(255,255,255,0.7);
+    padding: 4px 8px;
+    border-radius: 3px;
+    font-size: 14px;
+    color: #000;
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+  }
+
+  #navapi-attribution-fixed img {
+    width: 20px;
+    height: auto;
+    margin-right: 6px;
+  }
+
+  #navapi-attribution-fixed a {
+    color: #000;
+    text-decoration: none;
+  }
+
+  .dark-popup .leaflet-popup-content-wrapper {
+    background: #272932 !important;
+    color: #fff !important;
+    border: 1px solid #EF413D !important;
+    box-shadow: none !important;
+    max-width: 414px !important;
+  }
+
+  .dark-popup .leaflet-popup-content {
+    margin: 5px 7px !important; 
+    line-height: 1.2em !important;
+    font-size: 14px !important;
+  }
+
+  .dark-popup .leaflet-popup-content table {
+    border-collapse: collapse;
+    width: 100%;
+    padding: 2px;
+  }
+
+  .dark-popup .leaflet-popup-content table tr {
+    margin: 0;
+    padding: 0;
+  }
+
+  .dark-popup .leaflet-popup-content table td {
+    margin: 0;
+    padding: 2px 4px;
+    vertical-align: top;
+  }
+
+  .dark-popup .leaflet-popup-content tr:nth-child(odd) {
+    background: #2c2c34;
+  }
+
+  .dark-popup .leaflet-popup-content tr:nth-child(even) {
+    background: #1f1f23;
+  }
+
+  .dark-popup .leaflet-popup-content table td:first-child strong {
+    color: #DCE0E2 !important;
+  }
+
+  /* Calendar pop up modifications */
+  #date-range-container {
+    display: none;
+    background: #272932; /* Calendar pop up background color */
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    padding: 10px;
+    border-radius: 5px;
+    width: 200px; 
+    z-index: 9999;
+    border: 2px solid #55505C; /* Border around the calendar pop up */
+  }
+
+  #date-range-container label {
+    display: block;
+    margin-bottom: 5px;
+    color: #00b3b3;
+    font-size: 14px;
+    font-weight: bold;
+  }
+
+  #date-range-container input[type="datetime-local"] {
+    margin-bottom: 10px;
+    width: 100%;
+    padding: 4px;
+    background: #1f1f23;
+    color: white;
+    border: 1px solid #444;
+    border-radius: 3px;
+    font-size: 14px;
+  }
+
+  #date-range-container button {
+    background: #EF413D;
+    color: white;
+    border: none;
+    padding: 5px 10px;
+    margin-top: 5px;
+    cursor: pointer;
+    border-radius: 3px;
+  }
+
+  /* Ship type container modifications (Bootstrap form controls) */
+  #shiptype-container {
+    display: none;
+    background: #272932;
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    padding: 0;
+    border-radius: 6px;
+    width: 300px;
+    z-index: 9999;
+    border: 2px solid #55505C;
+  }
+
+  #shiptype-heading {
+    font-weight: bold;
+    font-size: 16px;
+    color: #00b3b3;
+    margin: 0;
+    padding: 6px 10px;
+    background: #1f1f23;
+    border-bottom: 1px solid #444;
+    border-top-left-radius: 4px;
+    border-top-right-radius: 4px;
+    text-align: left;
+  }
+
+  #shiptype-options {
+    max-height: 270px;
+    overflow-y: auto;
+    padding: 8px 4px 2px 4px;
+  }
+
+  #shiptype-options::-webkit-scrollbar { width: 10px; background: #333; }
+  #shiptype-options::-webkit-scrollbar-thumb { background: #555; border-radius: 3px; }
+
+  #shiptype-container .shiptype-item {
+    padding: 4px 8px;
+    border-radius: 4px;
+  }
+
+  #shiptype-container .shiptype-item:hover {
+    background: #333;
+  }
+
+  #shiptype-container .form-check-input {
+    cursor: pointer;
+    background-color: #1f1f23;
+    border: 1px solid #55505C;
+  }
+
+  #shiptype-container .form-check-input:checked {
+    background-color: #28a745;
+    border-color: #28a745;
+  }
+
+  #shiptype-container .form-check-label {
+    cursor: pointer;
+    font-size: 14px;
+    color: #fff;
+    user-select: none;
+  }
+
+  #shiptype-close-btn {
+    border-top-left-radius: 0;
+    border-top-right-radius: 0;
+  }
+</style>
+<link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/maneoverland/leaflet.WorldMiniMap/dist/Control.WorldMiniMap.css" />
+</head>
+<body>
+  <div id="top-container">
+    <img id="logo" src="https://general-icons.navapi.cc/NavapiLogoWR-1024.svg" alt="Navapi Logo"/>
+    <h2 id="endpoint-heading">POST : Endpoint→ /aisp/mvsl/FindByDestination</h2>
+    <div id="search-container">
+      <input type="text" id="search-input" placeholder="Enter comma separated destinations"/>
+      <button id="api-btn"><img src="https://general-icons.navapi.cc/ApiButton.svg" alt="API"/></button>
+      <button id="calendar-btn"><img src="https://general-icons.navapi.cc/Calendar.svg" alt="Calendar"/></button>
+      <button id="shiptype-btn"><img src="https://general-icons.navapi.cc/ShipType.svg" alt="Ship Type"/></button>
+      <button id="clear-btn"><img src="https://general-icons.navapi.cc/CloseButton.svg" alt="Close"/></button>
+
+      <div id="date-range-container" class="text-start">
+        <div class="mb-2">
+          <label for="from-datetime" class="form-label mb-1">From</label>
+          <input type="datetime-local" id="from-datetime" class="form-control form-control-sm">
+        </div>
+        <div class="mb-2">
+          <label for="to-datetime" class="form-label mb-1">To</label>
+          <input type="datetime-local" id="to-datetime" class="form-control form-control-sm">
+        </div>
+        <button id="apply-dates" class="btn btn-sm btn-danger w-100">Apply</button>
+      </div>
+
+      <div id="shiptype-container">
+          <div id="shiptype-heading">Select Ship Type</div>
+          <div id="shiptype-options" class="text-start">
+            <div class="form-check shiptype-item">
+              <input class="form-check-input" type="checkbox" id="shiptype-select-all">
+              <label class="form-check-label" for="shiptype-select-all">Select all Ship Types</label>
+            </div>
+            <hr class="my-2 border-secondary">
+            <div class="form-check shiptype-item">
+              <input class="form-check-input" type="checkbox" id="shiptype-0" value="0">
+              <label class="form-check-label" for="shiptype-0">[0] All Ship Types (default)</label>
+            </div>
+            <div class="form-check shiptype-item">
+              <input class="form-check-input" type="checkbox" id="shiptype-20" value="20">
+              <label class="form-check-label" for="shiptype-20">[20] Wing in ground (WIG), all ships</label>
+            </div>
+            <div class="form-check shiptype-item">
+              <input class="form-check-input" type="checkbox" id="shiptype-21" value="21">
+              <label class="form-check-label" for="shiptype-21">[21] WIG, Hazardous A</label>
+            </div>
+            <div class="form-check shiptype-item">
+              <input class="form-check-input" type="checkbox" id="shiptype-22" value="22">
+              <label class="form-check-label" for="shiptype-22">[22] WIG, Hazardous B</label>
+            </div>
+            <div class="form-check shiptype-item">
+              <input class="form-check-input" type="checkbox" id="shiptype-23" value="23">
+              <label class="form-check-label" for="shiptype-23">[23] WIG, Hazardous C</label>
+            </div>
+            <div class="form-check shiptype-item">
+              <input class="form-check-input" type="checkbox" id="shiptype-24" value="24">
+              <label class="form-check-label" for="shiptype-24">[24] WIG, Hazardous D</label>
+            </div>
+            <div class="form-check shiptype-item">
+              <input class="form-check-input" type="checkbox" id="shiptype-30" value="30">
+              <label class="form-check-label" for="shiptype-30">[30] Fishing</label>
+            </div>
+            <div class="form-check shiptype-item">
+              <input class="form-check-input" type="checkbox" id="shiptype-31" value="31">
+              <label class="form-check-label" for="shiptype-31">[31] Towing</label>
+            </div>
+            <div class="form-check shiptype-item">
+              <input class="form-check-input" type="checkbox" id="shiptype-32" value="32">
+              <label class="form-check-label" for="shiptype-32">[32] Towing: length>200m</label>
+            </div>
+            <div class="form-check shiptype-item">
+              <input class="form-check-input" type="checkbox" id="shiptype-33" value="33">
+              <label class="form-check-label" for="shiptype-33">[33] Dredging or underwater ops</label>
+            </div>
+            <div class="form-check shiptype-item">
+              <input class="form-check-input" type="checkbox" id="shiptype-34" value="34">
+              <label class="form-check-label" for="shiptype-34">[34] Diving ops</label>
+            </div>
+            <div class="form-check shiptype-item">
+              <input class="form-check-input" type="checkbox" id="shiptype-35" value="35">
+              <label class="form-check-label" for="shiptype-35">[35] Military ops</label>
+            </div>
+            <div class="form-check shiptype-item">
+              <input class="form-check-input" type="checkbox" id="shiptype-36" value="36">
+              <label class="form-check-label" for="shiptype-36">[36] Sailing</label>
+            </div>
+            <div class="form-check shiptype-item">
+              <input class="form-check-input" type="checkbox" id="shiptype-37" value="37">
+              <label class="form-check-label" for="shiptype-37">[37] Pleasure Craft</label>
+            </div>
+            <div class="form-check shiptype-item">
+              <input class="form-check-input" type="checkbox" id="shiptype-40" value="40">
+              <label class="form-check-label" for="shiptype-40">[40] HSC, all ships</label>
+            </div>
+            <div class="form-check shiptype-item">
+              <input class="form-check-input" type="checkbox" id="shiptype-41" value="41">
+              <label class="form-check-label" for="shiptype-41">[41] HSC, Hazardous A</label>
+            </div>
+            <div class="form-check shiptype-item">
+              <input class="form-check-input" type="checkbox" id="shiptype-42" value="42">
+              <label class="form-check-label" for="shiptype-42">[42] HSC, Hazardous B</label>
+            </div>
+            <div class="form-check shiptype-item">
+              <input class="form-check-input" type="checkbox" id="shiptype-43" value="43">
+              <label class="form-check-label" for="shiptype-43">[43] HSC, Hazardous C</label>
+            </div>
+            <div class="form-check shiptype-item">
+              <input class="form-check-input" type="checkbox" id="shiptype-44" value="44">
+              <label class="form-check-label" for="shiptype-44">[44] HSC, Hazardous D</label>
+            </div>
+            <div class="form-check shiptype-item">
+              <input class="form-check-input" type="checkbox" id="shiptype-49" value="49">
+              <label class="form-check-label" for="shiptype-49">[49] HSC, No additional info</label>
+            </div>
+            <div class="form-check shiptype-item">
+              <input class="form-check-input" type="checkbox" id="shiptype-50" value="50">
+              <label class="form-check-label" for="shiptype-50">[50] Pilot Vessel</label>
+            </div>
+            <div class="form-check shiptype-item">
+              <input class="form-check-input" type="checkbox" id="shiptype-51" value="51">
+              <label class="form-check-label" for="shiptype-51">[51] Search and Rescue vessel</label>
+            </div>
+            <div class="form-check shiptype-item">
+              <input class="form-check-input" type="checkbox" id="shiptype-53" value="53">
+              <label class="form-check-label" for="shiptype-53">[53] Port Tender</label>
+            </div>
+            <div class="form-check shiptype-item">
+              <input class="form-check-input" type="checkbox" id="shiptype-54" value="54">
+              <label class="form-check-label" for="shiptype-54">[54] Anti-pollution equipment</label>
+            </div>
+            <div class="form-check shiptype-item">
+              <input class="form-check-input" type="checkbox" id="shiptype-55" value="55">
+              <label class="form-check-label" for="shiptype-55">[55] Law Enforcement</label>
+            </div>
+            <div class="form-check shiptype-item">
+              <input class="form-check-input" type="checkbox" id="shiptype-56" value="56">
+              <label class="form-check-label" for="shiptype-56">[56] Spare - Local Vessel</label>
+            </div>
+            <div class="form-check shiptype-item">
+              <input class="form-check-input" type="checkbox" id="shiptype-57" value="57">
+              <label class="form-check-label" for="shiptype-57">[57] Spare - Local Vessel</label>
+            </div>
+            <div class="form-check shiptype-item">
+              <input class="form-check-input" type="checkbox" id="shiptype-58" value="58">
+              <label class="form-check-label" for="shiptype-58">[58] Medical Transport</label>
+            </div>
+            <div class="form-check shiptype-item">
+              <input class="form-check-input" type="checkbox" id="shiptype-59" value="59">
+              <label class="form-check-label" for="shiptype-59">[59] Noncombatant ship RR No.18</label>
+            </div>
+            <div class="form-check shiptype-item">
+              <input class="form-check-input" type="checkbox" id="shiptype-60" value="60">
+              <label class="form-check-label" for="shiptype-60">[60] Passenger, all ships</label>
+            </div>
+            <div class="form-check shiptype-item">
+              <input class="form-check-input" type="checkbox" id="shiptype-61" value="61">
+              <label class="form-check-label" for="shiptype-61">[61] Passenger, Hazardous A</label>
+            </div>
+            <div class="form-check shiptype-item">
+              <input class="form-check-input" type="checkbox" id="shiptype-62" value="62">
+              <label class="form-check-label" for="shiptype-62">[62] Passenger, Hazardous B</label>
+            </div>
+            <div class="form-check shiptype-item">
+              <input class="form-check-input" type="checkbox" id="shiptype-63" value="63">
+              <label class="form-check-label" for="shiptype-63">[63] Passenger, Hazardous C</label>
+            </div>
+            <div class="form-check shiptype-item">
+              <input class="form-check-input" type="checkbox" id="shiptype-64" value="64">
+              <label class="form-check-label" for="shiptype-64">[64] Passenger, Hazardous D</label>
+            </div>
+            <div class="form-check shiptype-item">
+              <input class="form-check-input" type="checkbox" id="shiptype-69" value="69">
+              <label class="form-check-label" for="shiptype-69">[69] Passenger, No additional info</label>
+            </div>
+            <div class="form-check shiptype-item">
+              <input class="form-check-input" type="checkbox" id="shiptype-70" value="70">
+              <label class="form-check-label" for="shiptype-70">[70] Cargo, all ships</label>
+            </div>
+            <div class="form-check shiptype-item">
+              <input class="form-check-input" type="checkbox" id="shiptype-71" value="71">
+              <label class="form-check-label" for="shiptype-71">[71] Cargo, Hazardous A</label>
+            </div>
+            <div class="form-check shiptype-item">
+              <input class="form-check-input" type="checkbox" id="shiptype-72" value="72">
+              <label class="form-check-label" for="shiptype-72">[72] Cargo, Hazardous B</label>
+            </div>
+            <div class="form-check shiptype-item">
+              <input class="form-check-input" type="checkbox" id="shiptype-73" value="73">
+              <label class="form-check-label" for="shiptype-73">[73] Cargo, Hazardous C</label>
+            </div>
+            <div class="form-check shiptype-item">
+              <input class="form-check-input" type="checkbox" id="shiptype-74" value="74">
+              <label class="form-check-label" for="shiptype-74">[74] Cargo, Hazardous D</label>
+            </div>
+            <div class="form-check shiptype-item">
+              <input class="form-check-input" type="checkbox" id="shiptype-79" value="79">
+              <label class="form-check-label" for="shiptype-79">[79] Cargo, No additional info</label>
+            </div>
+            <div class="form-check shiptype-item">
+              <input class="form-check-input" type="checkbox" id="shiptype-80" value="80">
+              <label class="form-check-label" for="shiptype-80">[80] Tanker, all ships</label>
+            </div>
+            <div class="form-check shiptype-item">
+              <input class="form-check-input" type="checkbox" id="shiptype-81" value="81">
+              <label class="form-check-label" for="shiptype-81">[81] Tanker, Hazardous A</label>
+            </div>
+            <div class="form-check shiptype-item">
+              <input class="form-check-input" type="checkbox" id="shiptype-82" value="82">
+              <label class="form-check-label" for="shiptype-82">[82] Tanker, Hazardous B</label>
+            </div>
+            <div class="form-check shiptype-item">
+              <input class="form-check-input" type="checkbox" id="shiptype-83" value="83">
+              <label class="form-check-label" for="shiptype-83">[83] Tanker, Hazardous C</label>
+            </div>
+            <div class="form-check shiptype-item">
+              <input class="form-check-input" type="checkbox" id="shiptype-84" value="84">
+              <label class="form-check-label" for="shiptype-84">[84] Tanker, Hazardous D</label>
+            </div>
+            <div class="form-check shiptype-item">
+              <input class="form-check-input" type="checkbox" id="shiptype-85" value="85">
+              <label class="form-check-label" for="shiptype-85">[85] Tanker, Reserved future use</label>
+            </div>
+            <div class="form-check shiptype-item">
+              <input class="form-check-input" type="checkbox" id="shiptype-89" value="89">
+              <label class="form-check-label" for="shiptype-89">[89] Tanker, No additional info</label>
+            </div>
+            <div class="form-check shiptype-item">
+              <input class="form-check-input" type="checkbox" id="shiptype-90" value="90">
+              <label class="form-check-label" for="shiptype-90">[90] Other Type, all ships</label>
+            </div>
+            <div class="form-check shiptype-item">
+              <input class="form-check-input" type="checkbox" id="shiptype-91" value="91">
+              <label class="form-check-label" for="shiptype-91">[91] Other Type, Hazardous A</label>
+            </div>
+            <div class="form-check shiptype-item">
+              <input class="form-check-input" type="checkbox" id="shiptype-92" value="92">
+              <label class="form-check-label" for="shiptype-92">[92] Other Type, Hazardous B</label>
+            </div>
+            <div class="form-check shiptype-item">
+              <input class="form-check-input" type="checkbox" id="shiptype-93" value="93">
+              <label class="form-check-label" for="shiptype-93">[93] Other Type, Hazardous C</label>
+            </div>
+          </div>
+          <button id="shiptype-close-btn" class="btn btn-sm btn-danger w-100 mt-2">Close</button>
+        </div>
+    </div>
+    <div id="results"></div>
+  </div>
+
+  <div id="map">
+    <div id="custom-attribution">
+      <img src="https://general-icons.navapi.cc/NavapiFavicon.svg" alt="icon" />
+      navapi.com
+    </div>
+  </div>
+
+  <div id="navapi-attribution-fixed">
+    <img src="https://general-icons.navapi.cc/NavapiFavicon.svg" alt="icon" />
+    <a href="https://navapi.com" target="_blank">navapi.com</a>
+  </div>
+
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <!-- The only change: ensure the arrow rotates properly -->
+  <script src="https://cdn.jsdelivr.net/npm/leaflet-rotatedmarker@0.2.0/leaflet.rotatedMarker.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/gh/maneoverland/leaflet.WorldMiniMap/dist/Control.WorldMiniMap.js"></script>
+  <script>
+    const map = L.map('map', { attributionControl: false }).setView([0.0, 0.0], 3);
+
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}', {
+      maxZoom: 19,
+      attribution: ''
+    }).addTo(map);
+
+    const worldMiniMap = L.control.worldMiniMap({
+      position: 'bottomleft',
+      mapOptions: {
+        layers: [L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}', { maxZoom: 12 })]
+      }
+    });
+    worldMiniMap.addTo(map);
+
+    const searchInput = document.getElementById('search-input');
+    const clearBtn = document.getElementById('clear-btn');
+    const apiBtn = document.getElementById('api-btn');
+    const calendarBtn = document.getElementById('calendar-btn');
+    const shiptypeBtn = document.getElementById('shiptype-btn');
+    const resultsContainer = document.getElementById('results');
+    const dateRangeContainer = document.getElementById('date-range-container');
+    const applyDatesBtn = document.getElementById('apply-dates');
+    const fromDateTime = document.getElementById('from-datetime');
+    const toDateTime = document.getElementById('to-datetime');
+
+    const shipTypeContainer = document.getElementById('shiptype-container');
+    const shipTypeCloseBtn = document.getElementById('shiptype-close-btn');
+
+    const markersLayer = L.layerGroup().addTo(map);
+    const SHIP_ICON = L.icon({
+      iconUrl: 'https://general-icons.navapi.cc/ShipIcon.svg',
+      iconSize: [16, 16],
+      iconAnchor: [8, 8]
+    });
+
+    let inFlightController = null;
+
+    /* =================== API CONFIG (navapi.pro) =================== */
+    // SECURITY NOTE: Add and save your Bearer token in the code, before calling the API.
+    // Example: const AUTH_TOKEN = 'Bearer PASTE_YOUR_TOKEN_HERE';
+    const AUTH_TOKEN = 'Bearer 29608fcfebe5855632b13a7ffc0ba79c1772020272281';
+
+    const FIND_BY_DESTINATION_URL = 'https://v1.navapi.pro/aisp/mvsl/FindByDestination';
+
+    function hasBearerToken() {
+      const t = (AUTH_TOKEN || '').trim();
+      return t.startsWith('Bearer ') && t.length > 7;
+    }
+
+    function toUtcIsoNoMs(localValue) {
+      const d = new Date(localValue);
+      if (Number.isNaN(d.getTime())) return null;
+      return d.toISOString().replace(/\.\d{3}Z$/, 'Z');
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    function displayVal(value) {
+      if (value === null || value === undefined || value === '') return '—';
+      return escapeHtml(value);
+    }
+
+    function displayNum(value, decimals = null) {
+      const n = Number(value);
+      if (!Number.isFinite(n)) return '—';
+      return decimals === null ? String(n) : n.toFixed(decimals);
+    }
+
+    function buildPopup(vessel) {
+      return `
+        <table>
+          <tr><td><strong>Name:</strong></td><td>${displayVal(vessel.ShipName)}</td></tr>
+          <tr><td><strong>Flag:</strong></td><td>${displayVal(vessel.ShipFlag)}</td></tr>
+          <tr><td><strong>IMO:</strong></td><td>${displayVal(vessel.ImoNumber)}</td></tr>
+          <tr><td><strong>MMSI:</strong></td><td>${displayVal(vessel.MmsiNumber)}</td></tr>
+          <tr><td><strong>Call Sign:</strong></td><td>${displayVal(vessel.CallSign)}</td></tr>
+          <tr><td><strong>Ship Type:</strong></td><td>${displayVal(vessel.ShipType)}</td></tr>
+          <tr><td><strong>Nav Status:</strong></td><td>${displayVal(vessel.NavigationStatus)}</td></tr>
+          <tr><td><strong>Origin:</strong></td><td>${displayVal(vessel.OriginDeclared)}</td></tr>
+          <tr><td><strong>Destination:</strong></td><td>${displayVal(vessel.DestDeclared)}</td></tr>
+          <tr><td><strong>ETA:</strong></td><td>${displayVal(vessel.EtaDeclared)}</td></tr>
+          <tr><td><strong>Latitude:</strong></td><td>${displayNum(vessel.Latitude, 6)}</td></tr>
+          <tr><td><strong>Longitude:</strong></td><td>${displayNum(vessel.Longitude, 6)}</td></tr>
+          <tr><td><strong>SOG (kt):</strong></td><td>${displayNum(vessel.SpeedOverGround, 1)}</td></tr>
+          <tr><td><strong>COG (°):</strong></td><td>${displayNum(vessel.CourseOverGround, 0)}</td></tr>
+          <tr><td><strong>CourseTx (°):</strong></td><td>${displayNum(vessel.CourseTransmitted, 0)}</td></tr>
+          <tr><td><strong>Draught:</strong></td><td>${displayVal(vessel.DraughtDeclared)}</td></tr>
+          <tr><td><strong>Last Updated:</strong></td><td>${displayVal(vessel.PositionLastUpdated)}</td></tr>
+        </table>
+      `;
+    }
+
+    /* ShipType checkbox behaviour:
+       - "Select all Ship Types" checks every ShipType code (except [0])
+       - [0] "All Ship Types (default)" stays mutually exclusive with specific codes
+    */
+    const shipTypeSelectAll = document.getElementById('shiptype-select-all');
+    const shipTypeAllCheckbox = document.getElementById('shiptype-0');
+    const shipTypeCheckboxes = Array.from(shipTypeContainer.querySelectorAll('input[type="checkbox"][value]'));
+    const shipTypeSpecificCheckboxes = shipTypeCheckboxes.filter(cb => cb !== shipTypeAllCheckbox);
+    const ALL_SHIP_TYPES = shipTypeSpecificCheckboxes.map(cb => cb.value);
+
+    function setDefaultShipTypes() {
+      if (shipTypeSelectAll) {
+        shipTypeSelectAll.checked = false;
+        shipTypeSelectAll.indeterminate = false;
+      }
+      shipTypeCheckboxes.forEach(cb => cb.checked = false);
+      if (shipTypeAllCheckbox) shipTypeAllCheckbox.checked = true;
+    }
+
+    function updateSelectAllState() {
+      if (!shipTypeSelectAll) return;
+
+      const checkedCount = shipTypeSpecificCheckboxes.filter(cb => cb.checked).length;
+      if (checkedCount === 0) {
+        shipTypeSelectAll.checked = false;
+        shipTypeSelectAll.indeterminate = false;
+      } else if (checkedCount === shipTypeSpecificCheckboxes.length) {
+        shipTypeSelectAll.checked = true;
+        shipTypeSelectAll.indeterminate = false;
+      } else {
+        shipTypeSelectAll.checked = false;
+        shipTypeSelectAll.indeterminate = true;
+      }
+    }
+
+    setDefaultShipTypes();
+
+    if (shipTypeSelectAll) {
+      shipTypeSelectAll.addEventListener('change', () => {
+        const on = shipTypeSelectAll.checked;
+        shipTypeSelectAll.indeterminate = false;
+
+        shipTypeSpecificCheckboxes.forEach(cb => cb.checked = on);
+        if (shipTypeAllCheckbox) shipTypeAllCheckbox.checked = !on;
+
+        if (!on) {
+          // Revert to initial default when user deselects "Select all".
+          setDefaultShipTypes();
+        } else {
+          updateSelectAllState();
+        }
+      });
+    }
+
+    if (shipTypeAllCheckbox) {
+      shipTypeAllCheckbox.addEventListener('change', () => {
+        if (shipTypeAllCheckbox.checked) {
+          shipTypeSpecificCheckboxes.forEach(cb => cb.checked = false);
+          if (shipTypeSelectAll) {
+            shipTypeSelectAll.checked = false;
+            shipTypeSelectAll.indeterminate = false;
+          }
+        } else {
+          const anySpecific = shipTypeSpecificCheckboxes.some(cb => cb.checked);
+          if (!anySpecific) shipTypeAllCheckbox.checked = true;
+        }
+      });
+    }
+
+    shipTypeSpecificCheckboxes.forEach(cb => {
+      cb.addEventListener('change', () => {
+        if (cb.checked && shipTypeAllCheckbox) shipTypeAllCheckbox.checked = false;
+
+        const anySpecific = shipTypeSpecificCheckboxes.some(x => x.checked);
+        if (!anySpecific && shipTypeAllCheckbox) shipTypeAllCheckbox.checked = true;
+
+        updateSelectAllState();
+      });
+    });
+
+    // Set default times
+    const today = new Date();
+    const yyyy = today.getFullYear();
+    const mm = String(today.getMonth() + 1).padStart(2, '0');
+    const dd = String(today.getDate()).padStart(2, '0');
+
+    fromDateTime.value = `${yyyy}-${mm}-${dd}T00:00`;
+    toDateTime.value = `${yyyy}-${mm}-${dd}T23:59`;
+
+    let storedFrom = fromDateTime.value;
+    let storedTo = toDateTime.value;
+
+    fromDateTime.addEventListener('change', () => {
+      storedFrom = fromDateTime.value;
+    });
+
+    toDateTime.addEventListener('change', () => {
+      storedTo = toDateTime.value;
+    });
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        resetDateTimes();
+        hideShipTypeContainer();
+      }
+    });
+
+    searchInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        processSearch();
+      }
+    });
+
+    apiBtn.addEventListener('click', () => {
+      processSearch();
+    });
+
+    clearBtn.addEventListener('click', () => {
+      // On clear, reset date times to default
+      resetDateTimes();
+      // Clear selected ship types
+      clearShipTypes();
+      hideShipTypeContainer();
+      clearSearch();
+    });
+
+    calendarBtn.addEventListener('click', (e) => {
+      toggleDateRangeContainer();
+      hideShipTypeContainer();
+      e.stopPropagation();
+    });
+
+    applyDatesBtn.addEventListener('click', () => {
+      storedFrom = fromDateTime.value;
+      storedTo = toDateTime.value;
+      toggleDateRangeContainer();
+    });
+
+    shiptypeBtn.addEventListener('click', (e) => {
+      toggleShipTypeContainer();
+      dateRangeContainer.style.display = 'none';
+      e.stopPropagation();
+    });
+
+    shipTypeCloseBtn.addEventListener('click', () => {
+      hideShipTypeContainer();
+    });
+
+    // Close on outside click
+    document.addEventListener('click', (e) => {
+      const isCalendarClick = dateRangeContainer.contains(e.target) || e.target === calendarBtn;
+      const isShipTypeClick = shipTypeContainer.contains(e.target) || e.target === shiptypeBtn;
+
+      if (!isCalendarClick) {
+        dateRangeContainer.style.display = 'none';
+      }
+
+      if (!isShipTypeClick) {
+        hideShipTypeContainer();
+      }
+    });
+
+    function clearSearch() {
+      searchInput.value = '';
+      clearResults();
+      markersLayer.clearLayers();
+      map.setView([0.0, 0.0], 3);
+    }
+
+    function clearResults() {
+      resultsContainer.innerHTML = '';
+    }
+
+    function toggleDateRangeContainer() {
+      if (dateRangeContainer.style.display === 'none' || !dateRangeContainer.style.display) {
+        dateRangeContainer.style.display = 'block';
+      } else {
+        dateRangeContainer.style.display = 'none';
+      }
+    }
+
+    function toggleShipTypeContainer() {
+      if (shipTypeContainer.style.display === 'none' || !shipTypeContainer.style.display) {
+        shipTypeContainer.style.display = 'block';
+      } else {
+        shipTypeContainer.style.display = 'none';
+      }
+    }
+
+    function hideShipTypeContainer() {
+      shipTypeContainer.style.display = 'none';
+    }
+
+    function clearShipTypes() {
+      setDefaultShipTypes();
+    }
+
+    function resetDateTimes() {
+      fromDateTime.value = `${yyyy}-${mm}-${dd}T00:00`;
+      toDateTime.value = `${yyyy}-${mm}-${dd}T23:59`;
+      storedFrom = fromDateTime.value;
+      storedTo = toDateTime.value;
+    }
+
+    async function processSearch() {
+      const rawQuery = searchInput.value.trim();
+      if (!rawQuery) return;
+
+      clearResults();
+      markersLayer.clearLayers();
+
+      if (!hasBearerToken()) {
+        resultsContainer.textContent = 'Add and save your Bearer token in the code, before calling the API (line 673)';
+        return;
+      }
+
+      const destinations = rawQuery.split(',').map(d => d.trim()).filter(Boolean);
+      if (destinations.length === 0) {
+        resultsContainer.textContent = 'Please enter at least one destination (comma separated).';
+        return;
+      }
+
+      if (!storedFrom || !storedTo) {
+        resultsContainer.textContent = 'Please select From and To date-times before searching.';
+        return;
+      }
+
+      const etaFromUtc = toUtcIsoNoMs(storedFrom);
+      const etaUntilUtc = toUtcIsoNoMs(storedTo);
+      if (!etaFromUtc || !etaUntilUtc) {
+        resultsContainer.textContent = 'Invalid date-time values; Please re-select your From and To date-times.';
+        return;
+      }
+
+      const fromMs = new Date(storedFrom).getTime();
+      const untilMs = new Date(storedTo).getTime();
+      if (Number.isFinite(fromMs) && Number.isFinite(untilMs) && fromMs > untilMs) {
+        resultsContainer.textContent = 'The "From" date-time must be earlier than the "To" date-time.';
+        return;
+      }
+
+      let shipTypeParam = '0';
+      if (shipTypeSelectAll && shipTypeSelectAll.checked) {
+        shipTypeParam = ALL_SHIP_TYPES.join(',');
+      } else {
+        const selected = shipTypeCheckboxes.filter(cb => cb.checked).map(cb => cb.value);
+        shipTypeParam = (selected.length === 0 || selected.includes('0')) ? '0' : selected.join(',');
+      }
+
+      const requestBody = {
+        DestDeclared: destinations,
+        EtaFrom: etaFromUtc,
+        EtaUntil: etaUntilUtc,
+        ShipType: shipTypeParam
+      };
+
+      resultsContainer.textContent = 'Fetching data...';
+
+      if (inFlightController) {
+        inFlightController.abort();
+      }
+      inFlightController = new AbortController();
+      const controller = inFlightController;
+
+      try {
+        const response = await fetch(FIND_BY_DESTINATION_URL, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': AUTH_TOKEN.trim()
+          },
+          signal: controller.signal,
+          body: JSON.stringify(requestBody)
+        });
+
+        let data = null;
+        try { data = await response.json(); } catch (_) { data = null; }
+
+        if (!response.ok) {
+          const msg = (data && data.Metadata && data.Metadata.ResultMessage) ? data.Metadata.ResultMessage : `HTTP ${response.status}`;
+          resultsContainer.textContent = `API call failed (${msg}).`;
+          return;
+        }
+
+        const vessels = (data && data.ApiResults && Array.isArray(data.ApiResults.mvsl_FindByDestination))
+          ? data.ApiResults.mvsl_FindByDestination
+          : [];
+
+          // Using a dedicated ship SVG icon (16x16) with rotation.
+
+        const bounds = [];
+        let plotted = 0;
+
+        vessels.forEach(vessel => {
+          const lat = Number(vessel.Latitude);
+          const lon = Number(vessel.Longitude);
+          if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
+
+          const ct = Number(vessel.CourseTransmitted);
+          const cog = Number(vessel.CourseOverGround);
+          const rotation = (Number.isFinite(ct) && ct >= 0) ? ct : ((Number.isFinite(cog) && cog >= 0) ? cog : 0);
+
+          const marker = L.marker([lat, lon], {
+            icon: SHIP_ICON,
+            rotationAngle: rotation,
+            rotationOrigin: 'center center'
+          }).addTo(markersLayer).bindPopup(buildPopup(vessel), { className: 'dark-popup' });
+
+          bounds.push([lat, lon]);
+          plotted += 1;
+        });
+
+        resultsContainer.textContent = `Found ${vessels.length} vessels; Plotted ${plotted} on map.`;
+
+        if (bounds.length > 1) {
+          map.fitBounds(bounds, { padding: [20, 20] });
+        } else if (bounds.length === 1) {
+          map.setView(bounds[0], 6);
+        } else {
+          map.setView([0.0, 0.0], 3);
+        }
+
+      } catch (error) {
+        if (error && error.name === 'AbortError') {
+          return;
+        }
+        console.error(error);
+        resultsContainer.textContent = 'An error occurred while fetching data; Check the browser console (network/CORS).';
+      } finally {
+        if (inFlightController === controller) {
+          inFlightController = null;
+        }
+      }
+    }
+
+  </script>
+</body>
+</html>

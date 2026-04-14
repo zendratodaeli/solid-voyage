@@ -1,0 +1,379 @@
+{
+  "info": {
+    "_postman_id": "27162fb2-9ba3-4141-ad3f-a34d825295bb",
+    "name": "2026.01.29_Solideo.../srtg/",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_exporter_id": "25297648"
+  },
+  "item": [
+    {
+      "name": "/ApiKeyStatus/",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "https://v1.navapi.pro/acnt/view/ApiKeyStatus",
+          "protocol": "https",
+          "host": [
+            "v1",
+            "navapi",
+            "pro"
+          ],
+          "path": [
+            "acnt",
+            "view",
+            "ApiKeyStatus"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "/autc/SeaPortSearch/",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "https://v1.navapi.pro/srtg/autc/SeaPortSearch?Q=tokyo",
+          "protocol": "https",
+          "host": [
+            "v1",
+            "navapi",
+            "pro"
+          ],
+          "path": [
+            "srtg",
+            "autc",
+            "SeaPortSearch"
+          ],
+          "query": [
+            {
+              "key": "Q",
+              "value": "tokyo"
+            }
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "/calc/SingleRoute/ (port-port)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "https://v1.navapi.pro/srtg/calc/SingleRoute?StartPortCode=GRPIR&StartLat=0&StartLon=0&EndPortCode=FITKU&EndLat=0&EndLon=0&GreatCircleInterval=0&AllowedAreas=1,2,4,5,7,8,9,10,12,13,14,15,16,17,10003&SecaAvoidance=0&ASLCompliance=0",
+          "protocol": "https",
+          "host": [
+            "v1",
+            "navapi",
+            "pro"
+          ],
+          "path": [
+            "srtg",
+            "calc",
+            "SingleRoute"
+          ],
+          "query": [
+            {
+              "key": "StartPortCode",
+              "value": "GRPIR"
+            },
+            {
+              "key": "StartLat",
+              "value": "0"
+            },
+            {
+              "key": "StartLon",
+              "value": "0"
+            },
+            {
+              "key": "EndPortCode",
+              "value": "FITKU"
+            },
+            {
+              "key": "EndLat",
+              "value": "0"
+            },
+            {
+              "key": "EndLon",
+              "value": "0"
+            },
+            {
+              "key": "GreatCircleInterval",
+              "value": "0"
+            },
+            {
+              "key": "AllowedAreas",
+              "value": "1,2,4,5,7,8,9,10,12,13,14,15,16,17,10003"
+            },
+            {
+              "key": "SecaAvoidance",
+              "value": "0"
+            },
+            {
+              "key": "ASLCompliance",
+              "value": "0"
+            }
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "/calc/SingleRoute/ (port-wpt)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "https://v1.navapi.pro/srtg/calc/SingleRoute?StartPortCode=NONVK&StartLat=0&StartLon=0&EndPortCode=&EndLat=58.777435&EndLon=12.925415&GreatCircleInterval=0&AllowedAreas=1,2,4,5,7,8,9,10,12,13,14,15,16,17,10003&SecaAvoidance=0&ASLCompliance=0",
+          "protocol": "https",
+          "host": [
+            "v1",
+            "navapi",
+            "pro"
+          ],
+          "path": [
+            "srtg",
+            "calc",
+            "SingleRoute"
+          ],
+          "query": [
+            {
+              "key": "StartPortCode",
+              "value": "NONVK"
+            },
+            {
+              "key": "StartLat",
+              "value": "0"
+            },
+            {
+              "key": "StartLon",
+              "value": "0"
+            },
+            {
+              "key": "EndPortCode",
+              "value": ""
+            },
+            {
+              "key": "EndLat",
+              "value": "58.777435"
+            },
+            {
+              "key": "EndLon",
+              "value": "12.925415"
+            },
+            {
+              "key": "GreatCircleInterval",
+              "value": "0"
+            },
+            {
+              "key": "AllowedAreas",
+              "value": "1,2,4,5,7,8,9,10,12,13,14,15,16,17,10003"
+            },
+            {
+              "key": "SecaAvoidance",
+              "value": "0"
+            },
+            {
+              "key": "ASLCompliance",
+              "value": "0"
+            }
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "/calc/SingleRoute/ (wpt-wpt)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "https://v1.navapi.pro/srtg/calc/SingleRoute?StartPortCode=&StartLat=43.191690&StartLon=27.672501&EndPortCode=&EndLat=45.709085&EndLon=4.834671&GreatCircleInterval=0&AllowedAreas=1,2,4,5,7,8,9,10,12,13,14,15,16,10003&SecaAvoidance=0&ASLCompliance=0",
+          "protocol": "https",
+          "host": [
+            "v1",
+            "navapi",
+            "pro"
+          ],
+          "path": [
+            "srtg",
+            "calc",
+            "SingleRoute"
+          ],
+          "query": [
+            {
+              "key": "StartPortCode",
+              "value": ""
+            },
+            {
+              "key": "StartLat",
+              "value": "43.191690"
+            },
+            {
+              "key": "StartLon",
+              "value": "27.672501"
+            },
+            {
+              "key": "EndPortCode",
+              "value": ""
+            },
+            {
+              "key": "EndLat",
+              "value": "45.709085"
+            },
+            {
+              "key": "EndLon",
+              "value": "4.834671"
+            },
+            {
+              "key": "GreatCircleInterval",
+              "value": "0"
+            },
+            {
+              "key": "AllowedAreas",
+              "value": "1,2,4,5,7,8,9,10,12,13,14,15,16,10003"
+            },
+            {
+              "key": "SecaAvoidance",
+              "value": "0"
+            },
+            {
+              "key": "ASLCompliance",
+              "value": "0"
+            }
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "/calc/MultipleRoutes/",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"ApiRequest\":[\r\n   {\r\n   \"StartLat\":0,\r\n   \"StartLon\":0,\r\n   \"StartPortCode\":\"NOMQN\",\r\n   \"EndLat\":0,\r\n   \"EndLon\":0,\r\n   \"EndPortCode\":\"FIMAA\",\r\n   \"GreatCircleInterval\":0,\r\n   \"AllowedAreas\":[1,2,4,5,7,8,9,10,12,13,14,15,16,10003],\r\n   \"SecaAvoidance\":0,               \r\n   \"AslCompliance\":0\r\n   },\r\n   {\r\n   \"StartLat\":3.8204,\r\n   \"StartLon\":122.6514,\r\n   \"StartPortCode\":\"\",\r\n   \"EndLat\":-39.4192,\r\n   \"EndLon\":145.7227,\r\n   \"EndPortCode\":\"\",\r\n   \"GreatCircleInterval\":0,\r\n   \"AllowedAreas\":[1,2,4,5,7,8,9,10,12,13,14,15,16,10003],\r\n   \"SecaAvoidance\":0,\r\n   \"AslCompliance\":0\r\n   },\r\n   {\r\n   \"StartLat\":0,\r\n   \"StartLon\":0,\r\n   \"StartPortCode\":\"FIHEL\",\r\n   \"EndLat\":0,\r\n   \"EndLon\":0,\r\n   \"EndPortCode\":\"GRPIR\",\r\n   \"GreatCircleInterval\":0,\r\n   \"AllowedAreas\":[1,2,4,5,7,8,9,10,12,13,14,15,16,10003],\r\n   \"SecaAvoidance\":0,\r\n   \"AslCompliance\":0\r\n   },\r\n   {\r\n   \"StartLat\":5.2613,\r\n   \"StartLon\":86.5557,\r\n   \"StartPortCode\":\"\",\r\n   \"EndLat\":0,\r\n   \"EndLon\":0,\r\n   \"EndPortCode\":\"CNWHI\",\r\n   \"GreatCircleInterval\":0,\r\n   \"AllowedAreas\":[1,2,4,5,7,8,9,10,12,13,14,15,16,10003],\r\n   \"SecaAvoidance\":0,                  \r\n   \"AslCompliance\":0\r\n   },\r\n   {\r\n   \"StartLat\":0,\r\n   \"StartLon\":0,\r\n   \"StartPortCode\":\"HKHKG\",\r\n   \"EndLat\":0,\r\n   \"EndLon\":0,\r\n   \"EndPortCode\":\"ZADUR\",\r\n   \"GreatCircleInterval\":0,\r\n   \"AllowedAreas\":[1,2,4,5,7,8,9,10,12,13,14,15,16,10003],\r\n   \"SecaAvoidance\":0,\r\n   \"AslCompliance\":0\r\n   },\r\n   {\r\n   \"StartLat\":0,\r\n   \"StartLon\":0,\r\n   \"StartPortCode\":\"AOLAD\",\r\n   \"EndLat\":0,\r\n   \"EndLon\":0,\r\n   \"EndPortCode\":\"USCHI\",\r\n   \"GreatCircleInterval\":0,\r\n   \"AllowedAreas\":[1,2,4,5,7,8,9,10,12,13,14,15,16,10003],\r\n   \"SecaAvoidance\":0,\r\n   \"AslCompliance\":0\r\n   },\r\n   {\r\n   \"StartLat\":0,\r\n   \"StartLon\":0,\r\n   \"StartPortCode\":\"BRRIG\",\r\n   \"EndLat\":0,\r\n   \"EndLon\":0,\r\n   \"EndPortCode\":\"CAPRR\",\r\n   \"GreatCircleInterval\":0,\r\n   \"AllowedAreas\":[1,2,4,5,7,8,9,10,12,13,14,15,16,10003],\r\n   \"SecaAvoidance\":0,\r\n   \"AslCompliance\":0\r\n   }\r\n   ]\r\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "https://v1.navapi.pro/srtg/calc/MultipleRoutes",
+          "protocol": "https",
+          "host": [
+            "v1",
+            "navapi",
+            "pro"
+          ],
+          "path": [
+            "srtg",
+            "calc",
+            "MultipleRoutes"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "/calc/SecaSegments/",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"ApiRequest\":[\r\n      {\r\n        \"lon\": 4.474164,\r\n        \"lat\": 51.902412\r\n      },\r\n      {\r\n        \"lon\": 4.468303,\r\n        \"lat\": 51.899693\r\n      },\r\n      {\r\n        \"lon\": 4.427705,\r\n        \"lat\": 51.902714\r\n      },\r\n      {\r\n        \"lon\": 4.415324,\r\n        \"lat\": 51.900143\r\n      },\r\n      {\r\n        \"lon\": 4.396462,\r\n        \"lat\": 51.895985\r\n      },\r\n      {\r\n        \"lon\": 4.355328,\r\n        \"lat\": 51.899719\r\n      },\r\n      {\r\n        \"lon\": 4.319429,\r\n        \"lat\": 51.893482\r\n      },\r\n      {\r\n        \"lon\": 4.308529,\r\n        \"lat\": 51.891804\r\n      },\r\n      {\r\n        \"lon\": 4.245465,\r\n        \"lat\": 51.91415\r\n      },\r\n      {\r\n        \"lon\": 4.220552,\r\n        \"lat\": 51.929131\r\n      },\r\n      {\r\n        \"lon\": 4.133735,\r\n        \"lat\": 51.970207\r\n      },\r\n      {\r\n        \"lon\": 4.040887,\r\n        \"lat\": 51.993061\r\n      },\r\n      {\r\n        \"lon\": 4.004667,\r\n        \"lat\": 52.004356\r\n      },\r\n      {\r\n        \"lon\": 3.383424,\r\n        \"lat\": 51.909691\r\n      },\r\n      {\r\n        \"lon\": 2.643092,\r\n        \"lat\": 51.774982\r\n      },\r\n      {\r\n        \"lon\": 2.06514,\r\n        \"lat\": 51.393642\r\n      },\r\n      {\r\n        \"lon\": 1.860501,\r\n        \"lat\": 51.249676\r\n      },\r\n      {\r\n        \"lon\": 1.423182,\r\n        \"lat\": 50.944977\r\n      },\r\n      {\r\n        \"lon\": 1.26832,\r\n        \"lat\": 50.875961\r\n      },\r\n      {\r\n        \"lon\": 1.15082,\r\n        \"lat\": 50.730366\r\n      },\r\n      {\r\n        \"lon\": 0.813471,\r\n        \"lat\": 50.564552\r\n      },\r\n      {\r\n        \"lon\": -10.847746,\r\n        \"lat\": 48.900354\r\n      },\r\n      {\r\n        \"lon\": -22.508963,\r\n        \"lat\": 47.236155\r\n      },\r\n      {\r\n        \"lon\": -34.17018,\r\n        \"lat\": 45.571957\r\n      },\r\n      {\r\n        \"lon\": -45.831397,\r\n        \"lat\": 43.907758\r\n      },\r\n      {\r\n        \"lon\": -57.492614,\r\n        \"lat\": 42.24356\r\n      },\r\n      {\r\n        \"lon\": -69.153831,\r\n        \"lat\": 40.579361\r\n      },\r\n      {\r\n        \"lon\": -73.789223,\r\n        \"lat\": 40.461395\r\n      },\r\n      {\r\n        \"lon\": -73.837929,\r\n        \"lat\": 40.456741\r\n      },\r\n      {\r\n        \"lon\": -74.017807,\r\n        \"lat\": 40.524044\r\n      },\r\n      {\r\n        \"lon\": -74.054077,\r\n        \"lat\": 40.634521\r\n      },\r\n      {\r\n        \"lon\": -74.050858,\r\n        \"lat\": 40.648361\r\n      },\r\n      {\r\n        \"lon\": -74.030083,\r\n        \"lat\": 40.690025\r\n      },\r\n      {\r\n        \"lon\": -74.024605,\r\n        \"lat\": 40.709469\r\n      },\r\n      {\r\n        \"lon\": -74.024606,\r\n        \"lat\": 40.709467\r\n      }\r\n    ]\r\n\r\n}\r\n",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "https://v1.navapi.pro/srtg/calc/SecaSegments",
+          "protocol": "https",
+          "host": [
+            "v1",
+            "navapi",
+            "pro"
+          ],
+          "path": [
+            "srtg",
+            "calc",
+            "SecaSegments"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "/calc/RoutesVia/",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"ApiRequest\":{\r\n  \"RoutePoints\": [\r\n    [ 23.6261, 37.89322],\r\n    [ 14.6445, 36.40977],\r\n    [ -5.2335, 36.08731]\r\n  ],\r\n  \"MidPoints\": [\r\n    [21.66270, 33.10859],\r\n    [9.86961, 41.30403]\r\n  ],\r\n  \"NaviMethod\": 0,\r\n  \"AllowedAreas\": \"1,2,4,5,7,8,9,10,12,13,14,15,16,10003\"\r\n}\r\n}\r\n",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "https://v1.navapi.pro/srtg/calc/RoutesVia",
+          "protocol": "https",
+          "host": [
+            "v1",
+            "navapi",
+            "pro"
+          ],
+          "path": [
+            "srtg",
+            "calc",
+            "RoutesVia"
+          ]
+        }
+      },
+      "response": []
+    }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "85662ae9e286c4ac365bff3037af188c1769696130860",
+        "type": "string"
+      }
+    ]
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "packages": {},
+        "requests": {},
+        "exec": [
+          ""
+        ]
+      }
+    },
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "packages": {},
+        "requests": {},
+        "exec": [
+          ""
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+# Solid Vision — Weather Routing Engine
+# Docker Compose for local development & single-server deployment
+
+services:
+  weather-engine:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: solid-vision-weather-engine
+    ports:
+      - "8001:8001"
+    environment:
+      - API_HOST=0.0.0.0
+      - API_PORT=8001
+      - REBUILD_INTERVAL_HOURS=6
+      - GRID_RESOLUTION=0.5
+    volumes:
+      # Persist land mask + ice cache between restarts
+      - engine-data:/app/data
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 2G  # Graph needs ~800MB RAM
+        reservations:
+          memory: 1G
+
+volumes:
+  engine-data:

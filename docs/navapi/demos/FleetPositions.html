@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>AISP: /mvsl/FleetPositions</title>
+<link rel="icon" type="image/svg+xml" href="https://general-icons.navapi.cc/NavapiFavicon.svg" />
+<style>
+  html, body { height: 100%; }
+  body {
+    font-family: Arial, sans-serif;
+    background: #272932;
+    color: white;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    font-size: 16px;
+    text-align: center;
+  }
+
+  #top-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 20px;
+    flex-shrink: 0;
+    position: relative;
+  }
+
+  #logo { margin-bottom: 10px; width: 360px; max-width: 90vw; }
+  #endpoint-heading { margin-bottom: 20px; font-size: 16px; color: #E5E5E5; }
+
+  #search-container {
+    position: relative;
+    width: 38%;
+    max-width: 450px;
+    min-width: 280px;
+    display: flex;
+    align-items: center;
+    margin: 0 auto;
+  }
+
+  #search-input {
+    padding: 10px;
+    font-size: 16px;
+    width: 100%;
+    border: 1px solid #444;
+    border-radius: 3px;
+    background: #1f1f23;
+    color: white;
+    padding-right: 70px;
+    box-sizing: border-box;
+  }
+  #search-input::placeholder { font-size: 14px; }
+
+  #api-btn {
+    position: absolute;
+    right: 36px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: none;
+    border: none;
+    cursor: pointer;
+  }
+  #api-btn img { width: 26px; height: 26px; object-fit: contain; }
+
+  #clear-btn {
+    position: absolute;
+    right: 8px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: none;
+    border: none;
+    padding: 0;
+    line-height: 1;
+    cursor: pointer;
+  }
+  #clear-btn img { width: 26px; height: 26px; object-fit: contain; }
+
+  #results {
+    width: 100%;
+    max-width: 450px;
+    margin: 20px auto 0 auto;
+    text-align: center;
+    min-height: 20px;
+  }
+
+  #map {
+    flex: 1;
+    width: 100%;
+    margin-top: 0;
+    position: relative;
+    min-height: 280px;
+  }
+
+  .leaflet-container { background: #ffffff; color: #000000; }
+
+  #custom-attribution {
+    position: absolute;
+    bottom: 8px;
+    left: 8px;
+    background: rgba(255,255,255,0.7);
+    padding: 4px 8px;
+    border-radius: 3px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 14px;
+    color: #000;
+    z-index: 500;
+    text-align: left;
+  }
+  #custom-attribution img { width: 20px; height: auto; }
+  #custom-attribution .attrib-text { line-height: 1.15; }
+  #custom-attribution .tile-attrib { font-size: 11px; opacity: 0.85; }
+
+  #navapi-attribution-fixed {
+    position: fixed;
+    bottom: 8px;
+    right: 8px;
+    background: rgba(255,255,255,0.7);
+    padding: 4px 8px;
+    border-radius: 3px;
+    font-size: 14px;
+    color: #000;
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+  }
+  #navapi-attribution-fixed img { width: 20px; height: auto; margin-right: 6px; }
+  #navapi-attribution-fixed a { color: #000; text-decoration: none; }
+
+  .dark-popup .leaflet-popup-content-wrapper {
+    background: #272932 !important;
+    color: #fff !important;
+    border: 1px solid #EF413D !important;
+    box-shadow: none !important;
+    max-width: 414px !important;
+  }
+  .dark-popup .leaflet-popup-content {
+    margin: 5px 7px !important;
+    line-height: 1.2em !important;
+    font-size: 14px !important;
+  }
+  .dark-popup .leaflet-popup-content table { border-collapse: collapse; width: 100%; padding: 2px; }
+  .dark-popup .leaflet-popup-content table tr { margin: 0; padding: 0; }
+  .dark-popup .leaflet-popup-content table td { margin: 0; padding: 2px 4px; vertical-align: top; }
+  .dark-popup .leaflet-popup-content tr:nth-child(odd) { background: #2c2c34; }
+  .dark-popup .leaflet-popup-content tr:nth-child(even) { background: #1f1f23; }
+  .dark-popup .leaflet-popup-content table td:first-child strong { color: #DCE0E2 !important; }
+
+  @media (max-width: 520px) {
+    #search-container { width: 86%; min-width: 0; }
+  }
+</style>
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/maneoverland/leaflet.WorldMiniMap/dist/Control.WorldMiniMap.css" />
+</head>
+<body>
+  <div id="top-container">
+    <img id="logo" src="https://general-icons.navapi.cc/NavapiLogoWR-1024.svg" alt="Navapi Logo"/>
+    <h2 id="endpoint-heading">POST : Endpoint→ /aisp/mvsl/FleetPositions</h2>
+
+    <div id="search-container">
+      <input
+        type="text"
+        id="search-input"
+        autocomplete="off"
+        placeholder="Enter comma-separated IDs (IMO=7 digits, MMSI=9 digits)"
+        aria-label="Enter comma-separated vessel IDs"
+      />
+      <button id="api-btn" type="button" aria-label="Fetch vessel positions">
+        <img src="https://general-icons.navapi.cc/ApiButton.svg" alt="API"/>
+      </button>
+      <button id="clear-btn" type="button" aria-label="Clear search">
+        <img src="https://general-icons.navapi.cc/CloseButton.svg" alt="Close"/>
+      </button>
+    </div>
+
+    <div id="results" role="status" aria-live="polite"></div>
+  </div>
+
+  <div id="map">
+    <div id="custom-attribution">
+      <img src="https://general-icons.navapi.cc/NavapiFavicon.svg" alt="icon" />
+      <div class="attrib-text">
+        <div>navapi.com</div>
+        <div class="tile-attrib">Tiles © Esri</div>
+      </div>
+    </div>
+  </div>
+
+  <div id="navapi-attribution-fixed">
+    <img src="https://general-icons.navapi.cc/NavapiFavicon.svg" alt="icon" />
+    <a href="https://navapi.com" target="_blank" rel="noopener">navapi.com</a>
+  </div>
+
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <script src="https://cdn.jsdelivr.net/gh/maneoverland/leaflet.WorldMiniMap/dist/Control.WorldMiniMap.js"></script>
+
+  <script>
+    const TILE_URL = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}';
+    const FLEETSCAN_URL = 'https://v1.navapi.pro/aisp/mvsl/FleetPositions';
+
+    // SECURITY NOTE: Enter your Bearer Token here (also remove the <> before and after "PASTE_YOUR_TOKEN_HERE").
+    const AUTH_TOKEN = 'Bearer 29608fcfebe5855632b13a7ffc0ba79c1772020272281';
+
+    const map = L.map('map', { attributionControl: false }).setView([0.0, 0.0], 3);
+
+    L.tileLayer(TILE_URL, {
+      maxZoom: 19,
+      attribution: ''
+    }).addTo(map);
+
+    const worldMiniMap = L.control.worldMiniMap({
+      position: 'bottomleft',
+      mapOptions: {
+        layers: [L.tileLayer(TILE_URL, { maxZoom: 12, attribution: '' })]
+      }
+    });
+    worldMiniMap.addTo(map);
+
+    const searchInput = document.getElementById('search-input');
+    const clearBtn = document.getElementById('clear-btn');
+    const apiBtn = document.getElementById('api-btn');
+    const resultsContainer = document.getElementById('results');
+
+    let currentMarkers = [];
+    let activeAbortController = null;
+
+    function escapeHtml(value) {
+      return String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    function formatValue(value) {
+      if (value === null || value === undefined || value === '') return 'N/A';
+      return escapeHtml(value);
+    }
+
+    function formatCoord(value) {
+      const n = Number(value);
+      if (!Number.isFinite(n)) return 'N/A';
+
+      // Round to a maximum of 5 decimals; trim trailing zeros.
+      let s = n.toFixed(5).replace(/\.?0+$/, '');
+      if (s === '-0') s = '0';
+      return escapeHtml(s);
+    }
+
+    function showMessage(message, isError) {
+      resultsContainer.style.color = isError ? '#EF413D' : '#E5E5E5';
+      resultsContainer.textContent = message;
+    }
+
+    function clearResults() {
+      resultsContainer.textContent = '';
+    }
+
+    function setUiBusy(isBusy) {
+      apiBtn.disabled = isBusy;
+      searchInput.disabled = isBusy;
+      apiBtn.style.opacity = isBusy ? '0.6' : '1';
+      searchInput.style.opacity = isBusy ? '0.8' : '1';
+    }
+
+    function clearMarkers() {
+      currentMarkers.forEach(marker => {
+        if (marker && typeof marker.remove === 'function') marker.remove();
+        else if (marker) map.removeLayer(marker);
+      });
+      currentMarkers = [];
+    }
+
+    function clearSearch() {
+      if (activeAbortController) {
+        try { activeAbortController.abort(); } catch (_) {}
+      }
+      activeAbortController = null;
+
+      setUiBusy(false);
+      searchInput.value = '';
+      clearResults();
+      clearMarkers();
+      map.setView([0.0, 0.0], 3);
+      searchInput.focus();
+    }
+
+    function normalizeIds(rawText) {
+      const sanitized = rawText.replace(/[^0-9,]/g, '');
+      const parts = sanitized.split(',').map(s => s.trim()).filter(Boolean);
+
+      // de-duplicate while preserving order
+      const seen = new Set();
+      const ids = [];
+      for (const p of parts) {
+        if (!seen.has(p)) {
+          seen.add(p);
+          ids.push(p);
+        }
+      }
+      return { sanitized, ids };
+    }
+
+    function buildRequestBody(ids) {
+      const allSevenDigits = ids.every(id => /^[0-9]{7}$/.test(id));
+      const allNineDigits  = ids.every(id => /^[0-9]{9}$/.test(id));
+
+      if (!(allSevenDigits || allNineDigits)) {
+        return { error: 'All entered IDs must be either 7-digit IMO or 9-digit MMSI numbers; do not mix them.' };
+      }
+
+      if (allSevenDigits) return { body: { ImoNumbers: ids } };
+      return { body: { MmsiNumbers: ids } };
+    }
+
+    function safeCogDegrees(value) {
+      const n = Number(value);
+      if (!Number.isFinite(n)) return 0;
+      return ((n % 360) + 360) % 360;
+    }
+
+    function shipIconHtml(cogDeg) {
+      // ShipIcon.svg should be oriented "north/up" at 0 degrees.
+      return `<img src="https://general-icons.navapi.cc/ShipIcon.svg" style="width:16px;height:16px;transform: rotate(${cogDeg}deg);transform-origin: 50% 50%;" />`;
+    }
+
+    async function fetchAndShowFleetData(requestBody) {
+      if (!AUTH_TOKEN || AUTH_TOKEN.includes('<PASTE_YOUR_TOKEN_HERE>')) {
+        showMessage('Add+Save your Bearer Token in the code prior calling the API.', true);
+        return;
+      }
+
+      if (activeAbortController) {
+        try { activeAbortController.abort(); } catch (_) {}
+      }
+
+      const controller = new AbortController();
+      activeAbortController = controller;
+
+      setUiBusy(true);
+      showMessage('Loading...', false);
+
+      const timeoutMs = 20000;
+      const timeoutId = setTimeout(() => {
+        try { controller.abort(); } catch (_) {}
+      }, timeoutMs);
+
+      try {
+        const response = await fetch(FLEETSCAN_URL, {
+          method: 'POST',
+          headers: {
+            'Authorization': AUTH_TOKEN,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(requestBody),
+          signal: controller.signal
+        });
+
+        if (!response.ok) {
+          let details = '';
+          try { details = await response.text(); } catch (_) {}
+          console.error('Failed to fetch fleet data', response.status, details);
+          showMessage('Failed to fetch fleet data; check token, IDs, or API availability.', true);
+          return;
+        }
+
+        const data = await response.json();
+
+        const vessels = (data && data.ApiResults && Array.isArray(data.ApiResults.mvsl_FleetPositions))
+          ? data.ApiResults.mvsl_FleetPositions
+          : [];
+
+        if (vessels.length === 0) {
+          showMessage('No vessel data returned for these IDs.', true);
+          clearMarkers();
+          return;
+        }
+
+        clearMarkers();
+
+        const bounds = [];
+        let placed = 0;
+
+        for (const vessel of vessels) {
+          const lat = Number(vessel.Latitude);
+          const lon = Number(vessel.Longitude);
+
+          if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+
+          const cogDeg = safeCogDegrees(vessel.CourseOverGround);
+
+          const customIcon = L.divIcon({
+            className: '',
+            html: shipIconHtml(cogDeg),
+            iconSize: [21, 21],
+            iconAnchor: [10.5, 10.5]
+          });
+
+          const popupContent = `
+            <table>
+              <tr><td><strong>Name:</strong></td><td>${formatValue(vessel.ShipName)}</td></tr>
+              <tr><td><strong>IMO:</strong></td><td>${formatValue(vessel.ImoNumber)}</td></tr>
+              <tr><td><strong>MMSI:</strong></td><td>${formatValue(vessel.MmsiNumber)}</td></tr>
+              <tr><td><strong>Call Sign:</strong></td><td>${formatValue(vessel.CallSign)}</td></tr>
+              <tr><td><strong>Flag:</strong></td><td>${formatValue(vessel.ShipFlag)}</td></tr>
+              <tr><td><strong>Ship Type:</strong></td><td>${formatValue(vessel.ShipType)}</td></tr>
+              <tr><td><strong>Nav Status:</strong></td><td>${formatValue(vessel.NavigationStatus)}</td></tr>
+              <tr><td><strong>Origin:</strong></td><td>${formatValue(vessel.OriginDeclared)}</td></tr>
+              <tr><td><strong>Destination:</strong></td><td>${formatValue(vessel.DestDeclared)}</td></tr>
+              <tr><td><strong>ETA:</strong></td><td>${formatValue(vessel.EtaDeclared)}</td></tr>
+              <tr><td><strong>SOG (kt):</strong></td><td>${formatValue(vessel.SpeedOverGround)}</td></tr>
+              <tr><td><strong>COG (deg):</strong></td><td>${formatValue(vessel.CourseOverGround)}</td></tr>
+              <tr><td><strong>Draught (m):</strong></td><td>${formatValue(vessel.DraughtDeclared)}</td></tr>
+              <tr><td><strong>DIM A,B,C,D (m):</strong></td><td>${formatValue(vessel.DimensionA)}, ${formatValue(vessel.DimensionB)}, ${formatValue(vessel.DimensionC)}, ${formatValue(vessel.DimensionD)}</td></tr>
+              <tr><td><strong>Last Updated:</strong></td><td>${formatValue(vessel.PositionLastUpdated)}</td></tr>
+              <tr><td><strong>Lat, Lon:</strong></td><td>${formatCoord(lat)}, ${formatCoord(lon)}</td></tr>
+            </table>
+          `;
+
+          const marker = L.marker([lat, lon], { icon: customIcon })
+            .addTo(map)
+            .bindPopup(popupContent, { className: 'dark-popup' });
+
+          currentMarkers.push(marker);
+          bounds.push([lat, lon]);
+          placed += 1;
+        }
+
+        if (placed === 0) {
+          showMessage('API returned vessels, but none had valid Latitude and Longitude.', true);
+          return;
+        }
+
+        if (bounds.length > 1) map.fitBounds(bounds, { padding: [20, 20] });
+        else map.setView(bounds[0], 6);
+
+        showMessage(`Loaded ${placed} vessel position${placed === 1 ? '' : 's'}.`, false);
+
+      } catch (error) {
+        if (error && error.name === 'AbortError') {
+          showMessage('Request cancelled or timed out.', true);
+          return;
+        }
+        console.error(error);
+        showMessage('An error occurred while fetching data.', true);
+      } finally {
+        clearTimeout(timeoutId);
+        setUiBusy(false);
+        if (activeAbortController === controller) activeAbortController = null;
+      }
+    }
+
+    function processSearch() {
+      const rawQuery = searchInput.value.trim();
+      if (!rawQuery) return;
+
+      clearResults();
+
+      const { sanitized, ids } = normalizeIds(rawQuery);
+      searchInput.value = sanitized;
+
+      if (ids.length === 0) return;
+
+      // Optional safety cap; change/remove as needed.
+      const maxIds = 200;
+      if (ids.length > maxIds) {
+        showMessage(`Too many IDs (${ids.length}); limit is ${maxIds}.`, true);
+        return;
+      }
+
+      const built = buildRequestBody(ids);
+      if (built.error) {
+        showMessage(built.error, true);
+        return;
+      }
+
+      fetchAndShowFleetData(built.body);
+    }
+
+    searchInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); processSearch(); }
+      if (e.key === 'Escape') { e.preventDefault(); clearSearch(); }
+    });
+
+    apiBtn.addEventListener('click', processSearch);
+    clearBtn.addEventListener('click', clearSearch);
+
+    searchInput.focus();
+  </script>
+</body>
+</html>

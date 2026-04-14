@@ -1,0 +1,1339 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["driverAdapters"]
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// USER & AUTHENTICATION (Clerk-based)
+// ═══════════════════════════════════════════════════════════════════
+
+model User {
+  id             String     @id @default(cuid())
+  clerkId        String     @unique // Clerk user ID
+  email          String     @unique
+  name           String?
+  roles          UserRole[]
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  vessels        Vessel[]
+  voyages        Voyage[]
+  savedScenarios Scenario[]
+}
+
+model UserRole {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role       RoleType
+  isCustom   Boolean  @default(false)
+  customName String?
+
+  @@unique([userId, role])
+}
+
+enum RoleType {
+  VESSEL_MANAGER
+  SHIPBROKER
+  VESSEL_OPERATOR
+  OWNER_MANAGEMENT
+  OTHER
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// ORGANIZATIONS (Clerk-synced)
+// ═══════════════════════════════════════════════════════════════════
+
+model Organization {
+  id        String   @id          // Clerk org ID (e.g. "org_abc123")
+  name      String
+  slug      String?
+  imageUrl  String?
+
+  // ─── Logo Display Preferences ─────────────────────────────
+  logoSize          Int      @default(64)    // Display size in px (32–128)
+  logoBorderRadius  String   @default("md")  // "none" | "sm" | "md" | "lg" | "full"
+
+  // ─── Organization Identity (Onboarding Gate) ──────────────
+  profileComplete     Boolean  @default(false)
+  companyLegalName    String?  // Full legal company name
+  companyAddress      String?  // Street address
+  companyCity         String?  // City
+  companyCountry      String?  // Country
+  companyPostalCode   String?  // Postal / ZIP code
+  contactFullName     String?  // Primary contact full name
+  contactNickname     String?  // Maritime nickname / call name
+  contactPhone        String?  // Optional: phone number
+  contactDepartment   String?  // Optional: "Chartering", "Operations", etc.
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  theme     OrgTheme?
+}
+
+model OrgTheme {
+  id           String   @id @default(cuid())
+  orgId        String   @unique
+  org          Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  accentColor  String?  // Hex color e.g. "#6366f1"
+  sidebarLabel String?  // Custom sidebar label override
+  currency     String   @default("USD") // Display currency: USD, EUR, GBP, NOK
+
+  // ─── AIS Dashboard Preferences ─────────────────────────────────
+  aisAutoRefresh Boolean @default(false) // Auto-refresh fleet positions (costs API tokens)
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// VESSEL DATA
+// ═══════════════════════════════════════════════════════════════════
+
+model Vessel {
+  id                    String     @id @default(cuid())
+  userId                String
+  user                  User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  orgId                 String?    // Clerk Organization ID for multi-tenancy
+
+  name                  String
+  imoNumber             String?    @unique
+  mmsiNumber            String?    @unique  // MMSI for AIS tracking
+  vesselType            VesselType
+  customVesselType      String?    // For custom types when vesselType is OTHER
+  dwt                   Float // Deadweight tonnage
+
+  // ─── Vessel Dimensions ─────────────────────────────────────────
+  loa                   Float?   // Length Overall (meters)
+  beam                  Float?   // Beam / breadth (meters)
+  summerDraft           Float?   // Summer draft (meters) — max loaded draft
+  grossTonnage          Float?   // GT (Gross Tonnage) — for port dues & canal tolls
+  netTonnage            Float?   // NT (Net Tonnage) — Suez/Panama fee basis
+
+  // ─── Vessel Identification ─────────────────────────────────────
+  yearBuilt             Int?     // Year of construction (for CII bands, vetting)
+  flagState             String?  // Flag state (e.g., "Marshall Islands")
+  classificationSociety String?  // e.g., "DNV", "Lloyd's Register"
+  iceClass              String?  // e.g., "1A", "1B", "1C" — for Arctic/Baltic trades
+
+  // ─── Capacity ──────────────────────────────────────────────────
+  vesselConstant        Float?   // Weight of stores/crew/provisions (MT) — deducted from DWT for actual cargo intake
+
+  // ─── Bulk Carrier / General Cargo Fields ───────────────────────
+  grainCapacity         Float?   // Grain capacity (cbm) — bulk carriers
+  baleCapacity          Float?   // Bale capacity (cbm) — general/break-bulk
+  numberOfHolds         Int?     // Number of cargo holds
+  numberOfHatches       Int?     // Number of cargo hatches
+  grabFitted            Boolean? // Whether vessel has grabs for self-unloading
+
+  // ─── Crane / Cargo Handling ────────────────────────────────────
+  craneCount            Int?     // Number of cranes
+  craneSWL              Float?   // Single crane Safe Working Load (MT)
+  hasTweenDecks         Boolean? // Tween deck fitted (break-bulk)
+
+  // ─── Container Ship Fields ─────────────────────────────────────
+  teuCapacity           Int?     // TEU (Twenty-foot Equivalent Unit) capacity
+  feuCapacity           Int?     // FEU (Forty-foot Equivalent Unit) capacity — alternative metric
+  reeferPlugs           Int?     // Number of reefer container power slots
+
+  // ─── Tanker Fields ─────────────────────────────────────────────
+  tankCapacity          Float?   // Total cargo tank capacity (cbm)
+  numberOfTanks         Int?     // Number of segregated cargo tanks
+  coatedTanks           Boolean? // Epoxy/zinc coated tanks — determines eligible cargo
+  heatingCoils          Boolean? // Cargo heating capability (viscous cargoes)
+  pumpingRate           Float?   // Cargo pumping rate (cbm/hour)
+  hasIGS                Boolean? // Inert Gas System
+  hasCOW                Boolean? // Crude Oil Washing system
+  hasSBT                Boolean? // Segregated Ballast Tanks
+
+  // ─── LNG / LPG Carrier Fields ──────────────────────────────────
+  cargoTankCapacityCbm  Float?   // LNG/LPG cargo tank capacity (cbm)
+  containmentType       String?  // "MEMBRANE", "MOSS", "TYPE_C" — tank technology
+  boilOffRate           Float?   // Daily boil-off rate (% of cargo per day, e.g. 0.10)
+  dualFuelEngine        String?  // Engine type: "DFDE", "ME_GI", "X_DF", "STEAM"
+  heelQuantity          Float?   // LNG heel retained on ballast (cbm)
+
+  // Speed profiles (knots)
+  ladenSpeed            Float
+  ballastSpeed          Float
+  ecoLadenSpeed         Float? // ECO profile laden speed
+  ecoBallastSpeed       Float? // ECO profile ballast speed
+
+  // Consumption profiles (MT/day)
+  ladenConsumption      Float?
+  ballastConsumption    Float?
+  ecoLadenConsumption   Float?
+  ecoBallastConsumption Float?
+  portConsumptionWithCrane    Float? // Port consumption with crane operation
+  portConsumptionWithoutCrane Float? // Port consumption without crane operation
+  
+  // Default fuel types for each consumption state (now String to support custom fuel types)
+  ballastFuelType       String @default("VLSFO")
+  ladenFuelType         String @default("VLSFO")
+  portFuelType          String @default("LSMGO")
+  
+  // Fuel capabilities - list of ALL fuel types this vessel can burn
+  fuelTypes             Json?    // Array: ["VLSFO", "LSMGO", "LNG"]
+  
+  // Per-fuel consumption profiles: { "VLSFO": { "laden": 14, "ballast": 11 }, "MGO": { "laden": 12, "ballast": 10 } }
+  fuelConsumption       Json?
+
+  // Commercial control & operating costs
+  commercialControl     CommercialControl @default(OWNED_BAREBOAT)
+  dailyOpex             Float?   @default(0) // USD/day — used for OPEX (owned) or Hire Rate (TC)
+  
+  // TC-In Hire (Time Charter-In)
+  dailyTcHireRate       Float?   // USD/day — daily hire rate for TC-In vessels
+  tcHireStartDate       DateTime?  // Charter period start
+  tcHireEndDate         DateTime?  // Charter period end
+
+  // Equipment
+  hasScrubber           Boolean  @default(false) // EGCS (Exhaust Gas Cleaning System) fitted
+
+  // Audit trail (denormalized for fast display)
+  createdByName         String?  // Name of user who created this vessel
+  updatedByName         String?  // Name of user who last updated this vessel
+
+  createdAt             DateTime   @default(now())
+  updatedAt             DateTime   @updatedAt
+
+  voyages               Voyage[]
+  inquiryCandidates     InquiryVesselCandidate[]
+
+  @@index([orgId])
+}
+
+enum VesselType {
+  // ─── Bulk Carriers ───────────────────
+  CAPESIZE
+  PANAMAX
+  POST_PANAMAX
+  SUPRAMAX
+  HANDYMAX
+  HANDYSIZE
+  BULK_CARRIER        // Generic bulk
+
+  // ─── Tankers ────────────────────────
+  VLCC                // Very Large Crude Carrier
+  SUEZMAX
+  AFRAMAX
+  MR_TANKER           // Medium Range
+  LR1_TANKER          // Long Range 1
+  LR2_TANKER          // Long Range 2
+  CHEMICAL_TANKER
+  PRODUCT_TANKER
+
+  // ─── Container Ships ────────────────
+  CONTAINER_FEEDER    // < 3,000 TEU
+  CONTAINER_PANAMAX   // 3,000–5,100 TEU
+  CONTAINER_POST_PANAMAX // 5,100–10,000 TEU
+  CONTAINER_ULCV      // Ultra Large > 10,000 TEU
+
+  // ─── Gas Carriers ───────────────────
+  LNG_CARRIER
+  LPG_CARRIER
+
+  // ─── General Cargo / Specialized ────
+  GENERAL_CARGO
+  MULTI_PURPOSE
+  HEAVY_LIFT
+  CAR_CARRIER         // PCC / PCTC (Ro-Ro)
+  RO_RO               // Roll-on/Roll-off
+
+  OTHER
+}
+
+enum CommercialControl {
+  OWNED_BAREBOAT
+  TIME_CHARTER
+  VOYAGE_CHARTER
+}
+
+enum FreightRateUnit {
+  PER_MT          // $/MT — bulk, tanker
+  PER_TEU         // $/TEU — container
+  PER_CBM         // $/cbm — LNG, LPG
+  LUMP_SUM        // Flat rate — project cargo
+  WORLDSCALE      // WS — tanker market
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// PORTS & DISTANCES
+// Source: NGA World Port Index (Pub 150) — 3,700+ ports worldwide
+// Seeded from NGA, managed via Admin CMS
+// ═══════════════════════════════════════════════════════════════════
+
+model Port {
+  id              String        @id @default(cuid())
+  name            String
+  locode          String        @unique  // UN/LOCODE e.g., "DEHAM"
+  country         String
+  region          Region?
+  latitude        Float
+  longitude       Float
+
+  // Port cost defaults
+  defaultPortDays Float         @default(2)
+
+  // NGA World Port Index fields
+  portNumber      Int?          @unique  // NGA port number
+  harborSize      String        @default("M") // V(ery small) | S(mall) | M(edium) | L(arge)
+  waterBody       String?       // Water body description
+  alternateName   String?       // Alternate names (semicolon-separated)
+  isActive        Boolean       @default(true)   // Super admin toggle
+  lastSyncedAt    DateTime?     // When last synced from NGA
+
+  bunkerPrices    BunkerPrice[]
+  
+  @@index([name])
+  @@index([country])
+  @@index([harborSize])
+  @@index([latitude, longitude])
+}
+
+enum Region {
+  NORTH_AMERICA
+  SOUTH_AMERICA
+  EUROPE
+  MEDITERRANEAN
+  MIDDLE_EAST
+  WEST_AFRICA
+  EAST_AFRICA
+  SOUTH_AFRICA
+  INDIAN_SUBCONTINENT
+  SOUTHEAST_ASIA
+  EAST_ASIA
+  AUSTRALIA
+  PACIFIC
+}
+
+model PortDistance {
+  id                String     @id @default(cuid())
+  originPortId      String
+  destinationPortId String
+  distanceNm        Float // Nautical miles
+  viaCanal          CanalType?
+
+  @@unique([originPortId, destinationPortId, viaCanal])
+}
+
+enum CanalType {
+  SUEZ
+  PANAMA
+  NONE
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// BUNKER PRICES
+// ═══════════════════════════════════════════════════════════════════
+
+model BunkerPrice {
+  id       String   @id @default(cuid())
+  portId   String
+  port     Port     @relation(fields: [portId], references: [id])
+  fuelType FuelType
+  price    Float // USD/MT
+  date     DateTime @default(now())
+
+  @@index([portId, fuelType, date])
+}
+
+enum FuelType {
+  VLSFO // Very Low Sulphur Fuel Oil
+  HSFO // High Sulphur Fuel Oil
+  HFO // Heavy Fuel Oil
+  MGO // Marine Gas Oil
+  LSMGO // Low Sulphur Marine Gas Oil
+  LNG // Liquefied Natural Gas
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// VOYAGE & CALCULATION
+// ═══════════════════════════════════════════════════════════════════
+
+model Voyage {
+  id                    String                 @id @default(cuid())
+  userId                String
+  user                  User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  orgId                 String?                // Clerk Organization ID for multi-tenancy
+  vesselId              String
+  vessel                Vessel                 @relation(fields: [vesselId], references: [id])
+
+  // Route - simple text fields for flexibility
+  openPort              String?  // Where the vessel is now (start position)
+  loadPort              String  // e.g., "Rotterdam, Netherlands"
+  dischargePort         String  // e.g., "Singapore"
+
+  // Multi-port voyage legs (JSON array for flexible multi-stop routes)
+  // Structure: { loadPorts: string[], dischargePorts: string[] }
+  voyageLegs            Json?
+
+  // Cargo
+  cargoQuantityMt       Float // Metric tons
+  cargoType             String?  // e.g., "Iron Ore", "Crude Oil", "Containers"
+  stowageFactor         Float?   // cbm/MT — for volume-limited cargo detection
+
+  // Freight rate configuration
+  freightRateUnit       FreightRateUnit @default(PER_MT)  // $/MT, $/TEU, Lump Sum, Worldscale
+
+  // Distances (can be auto-calculated or manual)
+  ballastDistanceNm     Float
+  ladenDistanceNm       Float
+
+  // Port operations
+  loadPortDays          Float
+  dischargePortDays     Float
+  waitingDays           Float                  @default(0)
+  idleDays              Float                  @default(0)
+
+  // Speed selection
+  useEcoSpeed           Boolean                @default(false)
+
+  // Speed override (allows per-voyage speed adjustment)
+  overrideLadenSpeed    Float?
+  overrideBallastSpeed  Float?
+  
+  // Crane usage (affects port consumption calculation)
+  useCrane              Boolean                @default(false)
+
+  // Canal
+  canalType             CanalType              @default(NONE)
+  canalTolls            Float                  @default(0)
+
+  // Bunker prices (multi-fuel support)
+  bunkerPriceUsd        Float  // Legacy: single fuel price (deprecated, kept for backward compatibility)
+  bunkerFuelType        FuelType               @default(VLSFO)
+  fuelPrices            Json?  // Dynamic fuel prices: { "VLSFO": 555, "LSMGO": 785 }
+  
+  // Fuel type overrides for this voyage (defaults from vessel if not set)
+  // Using String instead of FuelType enum to support custom fuel types
+  ladenFuelType         String?
+  ballastFuelType       String?
+  portFuelType          String?
+
+  // Costs
+  brokeragePercent      Float                  @default(1.25)
+  commissionPercent     Float                  @default(3.75)
+  additionalCosts       Float                  @default(0)
+  pdaCosts              Float                  @default(0)  // Proforma Disbursement Account
+  lubOilCosts           Float                  @default(0)  // Lubricating Oil & Cylinder Lub Oil
+
+  // Weather adjustment
+  weatherRiskMultiplier Float                  @default(1.0)
+
+  // Freight (input for calculation)
+  freightRateUsd        Float? // USD/MT offered
+
+  // EU ETS Compliance
+  loadPortCountryCode      String?  // ISO country code e.g. "NL"
+  dischargePortCountryCode String?  // ISO country code e.g. "SG"
+  euEtsApplicable          Boolean  @default(false)
+  euEtsPercentage          Int      @default(0) // 0, 50, or 100
+
+  // ─── Laycan (loading window, synced with cargo inquiry) ────────
+  laycanStart              DateTime?              // Earliest loading date
+  laycanEnd                DateTime?              // Latest cancelling date
+
+  // ─── Fleet Scheduling ─────────────────────────────────────────
+  estimatedDeparture    DateTime?              // When vessel departs open port
+  estimatedArrival      DateTime?              // When vessel arrives at final discharge
+  actualDeparture       DateTime?              // Actual departure (for IN_EXECUTION voyages)
+  actualArrival         DateTime?              // Actual arrival (for COMPLETED voyages)
+  redeliveryPort        String?                // Where vessel is free after this voyage
+  redeliveryDate        DateTime?              // When vessel becomes available
+
+  // Status
+  status                VoyageStatus           @default(DRAFT)
+
+  createdAt             DateTime               @default(now())
+  updatedAt             DateTime               @updatedAt
+
+  calculations          VoyageCalculation?
+  recommendations       FreightRecommendation?
+  actuals               VoyageActual?
+  scenarios             Scenario[]
+  shares                VoyageShare[]          // Per-voyage sharing permissions
+  comments              VoyageComment[]        // Discussion comments
+
+  @@index([orgId])
+}
+
+enum VoyageStatus {
+  DRAFT
+  NEW           // Cargo being evaluated (was ANALYZING)
+  OFFERED       // In negotiation (was RECOMMENDED)
+  FIXED         // Deal confirmed — actual data fields unlock
+  COMPLETED     // Voyage delivered
+  REJECTED      // Internal decision (not profitable)
+  LOST          // Competitor won
+  EXPIRED       // Laycan passed
+  WITHDRAWN     // Client pulled out
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// CALCULATION RESULTS (Stored for audit & comparison)
+// ═══════════════════════════════════════════════════════════════════
+
+model VoyageCalculation {
+  id               String   @id @default(cuid())
+  voyageId         String   @unique
+  voyage           Voyage   @relation(fields: [voyageId], references: [id], onDelete: Cascade)
+
+  // Duration breakdown
+  ballastSeaDays   Float
+  ladenSeaDays     Float
+  totalSeaDays     Float
+  totalPortDays    Float
+  totalVoyageDays  Float
+
+  // Bunker breakdown
+  ballastBunkerMt  Float
+  ladenBunkerMt    Float
+  portBunkerMt     Float
+  totalBunkerMt    Float
+  totalBunkerCost  Float
+
+  // Cost breakdown
+  opexCost         Float
+  canalCost        Float
+  brokerageCost    Float
+  commissionCost   Float
+  additionalCost   Float
+  totalVoyageCost  Float
+
+  // Revenue & Profitability
+  grossRevenue     Float? // Based on offered freight
+  netRevenue       Float?
+  voyagePnl        Float?
+  tce              Float // Time Charter Equivalent
+  breakEvenFreight Float // USD/MT
+
+  // TC-In Hire deduction
+  tcHireCost       Float?    // Total TC hire for voyage duration (dailyRate × days)
+  tcHireDailyRate  Float?    // Daily rate used
+  grossTce         Float?    // TCE before hire deduction
+  netTce           Float?    // TCE after hire deduction (= tce when no hire)
+
+  // EU ETS + Carbon
+  totalCO2Mt       Float?    // Total CO₂ emissions (metric tonnes)
+  euEtsCost        Float?    // Carbon tax cost (USD)
+  euEtsPercentage  Int?      // 0, 50, or 100% taxable
+
+  // CII Impact
+  ciiAttained      Float?    // gCO₂/(dwt·nm)
+  ciiRequired      Float?    // gCO₂/(dwt·nm) for this year
+  ciiRating        String?   // "A", "B", "C", "D", "E"
+  ciiRatio         Float?    // attained / required
+
+  calculatedAt     DateTime @default(now())
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// VOYAGE ACTUALS (Post-Execution Real Data)
+// ═══════════════════════════════════════════════════════════════════
+
+model VoyageActual {
+  id               String   @id @default(cuid())
+  voyageId         String   @unique
+  voyage           Voyage   @relation(fields: [voyageId], references: [id], onDelete: Cascade)
+
+  // Duration actuals
+  ballastSeaDays   Float
+  ladenSeaDays     Float
+  totalSeaDays     Float
+  totalPortDays    Float
+  totalVoyageDays  Float
+
+  // Bunker actuals
+  totalBunkerMt    Float
+  totalBunkerCost  Float
+
+  // Cost actuals
+  totalVoyageCost  Float
+
+  // Revenue & Profitability actuals
+  grossRevenue     Float?
+  voyagePnl        Float?
+  tce              Float?
+
+  // Operator notes
+  notes            String?  @db.Text
+
+  completedAt      DateTime?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// FREIGHT RECOMMENDATION
+// ═══════════════════════════════════════════════════════════════════
+
+model FreightRecommendation {
+  id                   String               @id @default(cuid())
+  voyageId             String               @unique
+  voyage               Voyage               @relation(fields: [voyageId], references: [id], onDelete: Cascade)
+
+  // Freight levels (USD/MT)
+  breakEvenFreight     Float
+  targetFreight        Float // With margin
+  minMarketFreight     Float // Market range low
+  maxMarketFreight     Float // Market range high
+  recommendedFreight   Float // Final recommendation
+
+  // Margins
+  targetMarginPercent  Float
+  targetMarginUsd      Float
+
+  // Risk assessment
+  overallRisk          RiskLevel
+  bunkerVolatilityRisk RiskLevel
+  weatherRisk          RiskLevel
+  marketAlignmentRisk  RiskLevel
+
+  // Decision support
+  confidenceScore      Float // 0-100
+  explanation          String               @db.Text
+  assumptions          Json // Key assumptions used
+
+  // Action recommendation
+  recommendation       RecommendationAction
+
+  createdAt            DateTime             @default(now())
+}
+
+enum RiskLevel {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum RecommendationAction {
+  STRONG_ACCEPT
+  ACCEPT
+  NEGOTIATE
+  REJECT
+  STRONG_REJECT
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// SCENARIO COMPARISON
+// ═══════════════════════════════════════════════════════════════════
+
+model Scenario {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  orgId       String?  // Clerk Organization ID for multi-tenancy
+  voyageId    String
+  voyage      Voyage   @relation(fields: [voyageId], references: [id], onDelete: Cascade)
+
+  name        String
+  description String?
+
+  // Overrides from base voyage
+  overrides   Json // { ladenSpeed: 12, bunkerPriceUsd: 550, ... }
+
+  // Calculated results
+  results     Json // Full calculation results
+
+  createdAt   DateTime @default(now())
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// WEATHER RISK PROFILES
+// ═══════════════════════════════════════════════════════════════════
+
+model SeasonalWeatherProfile {
+  id                    String  @id @default(cuid())
+  tradeRoute            String // e.g., "AG-FEAST" (Arabian Gulf to Far East)
+  month                 Int // 1-12
+
+  averageRiskMultiplier Float // 1.0 = normal, 1.15 = 15% buffer
+  additionalSeaDays     Float // Extra days to account for
+  description           String?
+
+  @@unique([tradeRoute, month])
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// MARKET RATE BENCHMARKS
+// ═══════════════════════════════════════════════════════════════════
+
+model MarketBenchmark {
+  id          String     @id @default(cuid())
+  tradeRoute  String
+  vesselType  VesselType
+  freightRate Float // USD/MT
+  tcRate      Float? // USD/day TC equivalent
+  date        DateTime   @default(now())
+  source      String? // e.g., "Baltic Exchange", "Manual"
+
+  @@index([tradeRoute, vesselType, date])
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// SYSTEM PRICING (Singleton for Global Fuel Benchmarks)
+// ═══════════════════════════════════════════════════════════════════
+
+model SystemPricing {
+  id                   String   @id @default("system_pricing")
+  
+  // ═══════════════════════════════════════════════════════════════════
+  // FUEL PRICES (USD/MT)
+  // ═══════════════════════════════════════════════════════════════════
+  
+  // Distillates / ECA Compliant
+  globalLSMGOAverage   Float    @default(0)  // USD/MT (0.1% Sulfur)
+  
+  // Residuals
+  globalVLSFOAverage   Float    @default(0)  // USD/MT (0.5% Sulfur)
+  globalIFO380Average  Float    @default(0)  // USD/MT (High Sulfur)
+  globalIFO180Average  Float    @default(0)  // USD/MT (High Sulfur)
+  
+  // Alternative Fuels
+  globalLNGAverage     Float    @default(0)  // USD/MT
+  
+  // Regulatory / Carbon Pricing
+  globalEUAPrice       Float    @default(75.00)  // EU ETS Carbon Price (USD/MT CO2)
+  
+  // ═══════════════════════════════════════════════════════════════════
+  // CARBON EMISSION FACTORS (MT CO2 per MT Fuel) - IMO MEPC.308
+  // ═══════════════════════════════════════════════════════════════════
+  
+  carbonFactorVLSFO    Float    @default(3.114)   // Very Low Sulfur Fuel Oil
+  carbonFactorLSMGO    Float    @default(3.206)   // Low Sulfur Marine Gas Oil
+  carbonFactorIFO380   Float    @default(3.114)   // Heavy Fuel Oil
+  carbonFactorIFO180   Float    @default(3.114)   // Intermediate Fuel Oil
+  carbonFactorLNG      Float    @default(3.160)   // Liquefied Natural Gas
+  carbonFactorMETHANOL Float    @default(1.375)   // Methanol
+  carbonFactorAMMONIA  Float    @default(0.050)   // Ammonia (Very Low Carbon)
+  
+  lastUpdatedAt        DateTime @updatedAt
+  updatedBy            String?
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// ORG PRICING (Per-Organization Fuel Benchmarks)
+// Seeded from SystemPricing on first access, then independently managed
+// ═══════════════════════════════════════════════════════════════════
+
+model OrgPricing {
+  id                   String   @id @default(cuid())
+  orgId                String   @unique  // Clerk Organization ID — one record per org
+
+  // Fuel Prices (USD/MT)
+  globalLSMGOAverage   Float    @default(0)
+  globalVLSFOAverage   Float    @default(0)
+  globalIFO380Average  Float    @default(0)
+  globalIFO180Average  Float    @default(0)
+  globalLNGAverage     Float    @default(0)
+  globalEUAPrice       Float    @default(75.00)
+
+  // Carbon Emission Factors (MT CO2 per MT Fuel) - IMO MEPC.308
+  carbonFactorVLSFO    Float    @default(3.114)
+  carbonFactorLSMGO    Float    @default(3.206)
+  carbonFactorIFO380   Float    @default(3.114)
+  carbonFactorIFO180   Float    @default(3.114)
+  carbonFactorLNG      Float    @default(3.160)
+  carbonFactorMETHANOL Float    @default(1.375)
+  carbonFactorAMMONIA  Float    @default(0.050)
+
+  lastUpdatedAt        DateTime @updatedAt
+  updatedBy            String?
+
+  @@index([orgId])
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// STRATEGIC PASSAGES (Canals & Straits)
+// ═══════════════════════════════════════════════════════════════════
+
+model StrategicPassage {
+  id              String   @id @default(cuid())
+  name            String   @unique  // "Kiel Canal", "Sunda Strait"
+  displayName     String   // "Kiel Canal (Germany)"
+  type            String   // "canal" | "strait"
+  region          String   // "Europe", "Asia", "Global"
+  
+  // Entry coordinates
+  entryLat        Float
+  entryLng        Float
+  entryName       String   // "Brunsbüttel"
+  
+  // Exit coordinates
+  exitLat         Float
+  exitLng         Float
+  exitName        String   // "Holtenau"
+  
+  // Safety restrictions
+  maxDraft        Float?   // Max draft in meters (null = no restriction)
+  restriction     String?  // Description of restriction
+  
+  // Cost flags
+  hasToll         Boolean  @default(false)
+  
+  // Metadata
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// ORGANIZATION USAGE TRACKING (Freemium Rate Limiting)
+// ═══════════════════════════════════════════════════════════════════
+
+model OrganizationUsage {
+  id               String   @id @default(cuid())
+  orgId            String   // Clerk Organization ID
+  date             DateTime @db.Date  // Day-level granularity (UTC)
+  calculationType  String   // "route_planner" | "voyage_calculate"
+  calculationCount Int      @default(0)
+
+  @@unique([orgId, date, calculationType])
+  @@index([orgId, date])
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// FLEET SCHEDULE FILTER PRESETS (Saved filter configurations)
+// ═══════════════════════════════════════════════════════════════════
+
+model FleetFilterPreset {
+  id           String   @id @default(cuid())
+  orgId        String   // Clerk Organization ID
+  name         String   // e.g., "Cape open W. Africa 30d"
+  filters      Json     // Serialized filter state: { sortKey, hideCompleted, vesselTypeFilter, dwtRange, ... }
+  createdBy    String   // Clerk user ID
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([orgId])
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// CARGO INQUIRY BOARD (Commercial Pipeline)
+// ═══════════════════════════════════════════════════════════════════
+
+model CargoInquiry {
+  id                String   @id @default(cuid())
+  orgId             String
+
+  // ─── Cargo Details ──────────────────────────────────
+  cargoType         String            // "Coal", "Iron Ore", "Grain"
+  cargoQuantityMt   Float             // 65000
+  stowageFactor     Float?            // m³/MT — e.g., 1.3 for grain
+  cubicCapacityReq  Float?            // Auto: qty × SF
+
+  // ─── Route ──────────────────────────────────────────
+  loadPort          String            // "Richards Bay"
+  dischargePort     String            // "ARA"
+  loadRegion        String?           // "West Africa" — for analytics
+  dischargeRegion   String?           // "Europe"
+
+  // ─── Laycan ─────────────────────────────────────────
+  laycanStart       DateTime?         // May 5
+  laycanEnd         DateTime?         // May 10
+
+  // ─── Commercial ─────────────────────────────────────
+  freightOffered    Float?            // $/MT offered by charterer
+  freightCountered  Float?            // $/MT our latest counter-offer
+  commissionPercent Float?            // Broker commission %
+  estimatedRevenue  Float?            // freightOffered × cargoQuantity (auto-calculated)
+
+  // ─── Negotiation History ────────────────────────────
+  // JSON array: [{ round: 1, theirOffer: 14.50, ourCounter: 15.20, date: "...", note: "..." }]
+  negotiationRounds Json?
+
+  // ─── Source / Contact ───────────────────────────────
+  source            String?           // "Broker A via email", "Direct", etc.
+  brokerName        String?           // Named broker/company for scorecard
+  contactName       String?           // Individual contact person
+  contactEmail      String?           // Contact email
+
+  // ─── Status Pipeline ────────────────────────────────
+  // NEW → EVALUATING → OFFERED → NEGOTIATING → FIXED → LOST → EXPIRED → WITHDRAWN
+  status            String  @default("NEW")
+
+  // ─── Urgency (auto-calculated in UI from laycan proximity) ──
+  // "URGENT" (<3d) | "ACTIVE" (3-7d) | "PLANNING" (7+d) | "OVERDUE" (past)
+  priority          String?
+
+  // ─── Vessel Linkage ─────────────────────────────────
+  // The vessel finally selected (after multi-vessel evaluation)
+  selectedVesselId  String?
+  voyageId          String?           // Created when FIXED → becomes a real voyage
+
+  // ─── Notes & Outcome ────────────────────────────────
+  notes             String?
+  rejectionReason   String?           // Why lost/expired/withdrawn
+
+  // ─── Assignment & Audit ─────────────────────────────
+  createdBy         String            // Clerk user ID
+  createdByName     String?           // Denormalized for display
+  assignedTo        String?           // Clerk user ID of assigned charterer
+  assignedToName    String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  // ─── Relations ──────────────────────────────────────
+  vesselCandidates  InquiryVesselCandidate[]
+
+  @@index([orgId])
+  @@index([orgId, status])
+  @@index([selectedVesselId])
+  @@index([laycanStart])
+}
+
+// Multi-vessel evaluation: track candidate vessels per inquiry
+model InquiryVesselCandidate {
+  id          String   @id @default(cuid())
+  inquiryId   String
+  inquiry     CargoInquiry @relation(fields: [inquiryId], references: [id], onDelete: Cascade)
+  vesselId    String
+  vessel      Vessel   @relation(fields: [vesselId], references: [id])
+
+  // Evaluation data
+  estimatedTce  Float?    // Calculated TCE for this vessel + inquiry combo
+  notes         String?   // "Good fit, but opens 2 days late"
+  isSelected    Boolean   @default(false)  // The one ultimately picked
+  evaluatedAt   DateTime  @default(now())
+  evaluatedBy   String?   // Clerk user ID
+
+  @@unique([inquiryId, vesselId])
+  @@index([inquiryId])
+  @@index([vesselId])
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// VOYAGE SHARING (Per-Voyage Permissions)
+// ═══════════════════════════════════════════════════════════════════
+
+model VoyageShare {
+  id         String   @id @default(cuid())
+  voyageId   String
+  voyage     Voyage   @relation(fields: [voyageId], references: [id], onDelete: Cascade)
+  sharedWith String   // Clerk user ID of the member
+  permission String   // "view" | "update"
+  createdAt  DateTime @default(now())
+
+  @@unique([voyageId, sharedWith])
+  @@index([sharedWith])
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// ACTIVITY AUDIT LOG
+// ═══════════════════════════════════════════════════════════════════
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  orgId      String   // Clerk Organization ID
+  entityType String   // "vessel" | "voyage"
+  entityId   String
+  entityName String   // Display name (e.g. vessel name)
+  action     String   // "created" | "updated" | "deleted" | "shared"
+  userId     String   // Who performed the action
+  userName   String   // Denormalized for fast display
+  changes    Json?    // { field: { from, to } } for updates
+  createdAt  DateTime @default(now())
+
+  @@index([orgId, entityType, entityId])
+  @@index([orgId, createdAt])
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// CUSTOM WEATHER LOCATIONS (Per-User)
+// ═══════════════════════════════════════════════════════════════════
+
+model WeatherLocation {
+  id        String   @id @default(cuid())
+  clerkId   String   // Clerk user ID — each user has their own set
+  name      String
+  latitude  Float
+  longitude Float
+  createdAt DateTime @default(now())
+
+  @@index([clerkId])
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// LAYTIME & DEMURRAGE CALCULATIONS
+// ═══════════════════════════════════════════════════════════════════
+
+model LaytimeCalculation {
+  id                 String   @id @default(cuid())
+  userId             String
+  orgId              String?
+
+  // Charter party terms
+  vesselName         String   @default("")
+  voyageRef          String   @default("")
+  portName           String   @default("")
+  operationType      String   @default("loading") // loading | discharging
+  laytimeMode        String   @default("fixed")   // fixed | rate
+  allowedHours       Float    @default(72)
+  cargoQuantity      Float?
+  loadingRate        Float?
+  terms              String   @default("SHINC")   // SHINC | SHEX | SSHEX | SHEXUU
+  demurrageRate      Float    @default(25000)
+  despatchRate       Float    @default(12500)
+  norTendered        DateTime?
+  laytimeCommenced   DateTime?
+  reversible         Boolean  @default(false)
+
+  // Time sheet events (JSON array)
+  events             Json     @default("[]")
+
+  // Computed results (cached for display in list views)
+  resultType         String?  // "demurrage" | "despatch"
+  resultAmount       Float?
+  countedHours       Float?
+  excludedHours      Float?
+
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@index([orgId])
+  @@index([userId])
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// VOYAGE COMMENTS (Advisory Discussion)
+// ═══════════════════════════════════════════════════════════════════
+
+model VoyageComment {
+  id        String   @id @default(cuid())
+  voyageId  String
+  voyage    Voyage   @relation(fields: [voyageId], references: [id], onDelete: Cascade)
+  userId    String   // Clerk User ID
+  userName  String   // Denormalized for display
+  content   String   @db.Text  // Rich HTML content (TipTap)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([voyageId])
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// SAVED ROUTES (Route Planner persistence)
+// ═══════════════════════════════════════════════════════════════════
+
+model SavedRoute {
+  id          String   @id @default(cuid())
+  userId      String   // Clerk User ID
+  orgId       String?  // Clerk Organization ID
+
+  name        String
+  description String?
+  waypoints   Json     @default("[]") // Full waypoint array with ports, passages, configs
+  result      Json     @default("{}") // Full RouteResultData
+  speed       Float    @default(12.5)
+  vesselId    String?  // Optional linked vessel ID
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([orgId])
+  @@index([userId])
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// AI COPILOT (Chat persistence & Cargo inquiries)
+// ═══════════════════════════════════════════════════════════════════
+
+model ChatSession {
+  id        String        @id @default(cuid())
+  orgId     String        // Clerk Organization ID
+  userId    String        // Clerk User ID
+  title     String?       // Auto-generated from first message
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+  messages  ChatMessage[]
+
+  @@index([orgId, userId])
+}
+
+model ChatMessage {
+  id          String      @id @default(cuid())
+  sessionId   String
+  session     ChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  role        String      // "user" | "assistant" | "tool"
+  content     String      @db.Text
+  toolCalls   Json?       // Tool call details for re-rendering structured data
+  toolResults Json?       // Tool results for context
+  createdAt   DateTime    @default(now())
+
+  @@index([sessionId])
+}
+
+
+// ═══════════════════════════════════════════════════════════════════
+// CMS — Dynamic Site Pages (Super Admin Managed)
+// ═══════════════════════════════════════════════════════════════════
+
+model SitePage {
+  id          String   @id @default(cuid())
+  slug        String   @unique          // "privacy-policy", "contact", "guidance", "terms"
+  title       String                    // "Privacy Policy"
+  content     String   @db.Text         // Rich text HTML content (TipTap)
+  metaDesc    String?                   // SEO meta description
+  isPublished Boolean  @default(true)   // Draft vs published
+  sortOrder   Int      @default(0)      // Display order in footer links
+  icon        String?                   // Lucide icon name for navigation
+  updatedBy   String?                   // Email of last editor
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([isPublished])
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// PLATFORM SETTINGS (Super Admin — Logo, Name, etc.)
+// ═══════════════════════════════════════════════════════════════════
+
+model PlatformSettings {
+  id            String   @id @default("platform_settings")
+  platformName  String   @default("Solid Voyage")          // Editable project name
+  logoUrl       String?                                     // Custom logo URL (base64 or external)
+  faviconUrl    String?                                     // Custom favicon URL
+  footerText    String?  @default("Premium Maritime Freight Intelligence.")  // Footer tagline
+  updatedBy     String?                                     // Email of last editor
+  updatedAt     DateTime @updatedAt
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// PLATFORM ADMINS (Runtime super admin management)
+// ═══════════════════════════════════════════════════════════════════
+
+model PlatformAdmin {
+  id        String   @id @default(cuid())
+  email     String   @unique                  // Email of the super admin
+  name      String?                           // Display name (optional)
+  addedBy   String                            // Email of the admin who added this person
+
+  // ─── RBAC Permissions (all default false — root explicitly assigns) ───
+  canManagePages      Boolean @default(false)  // CMS Site Pages
+  canManageMarketData Boolean @default(false)  // Global Market Data
+  canManageMaritimeIntel Boolean @default(false) // Maritime Intelligence (canal tolls, war risk, etc.)
+  canManageSettings   Boolean @default(false)  // Platform Settings
+  canManageAdmins     Boolean @default(false)  // Add/delete other admins (only root can grant this)
+  canManageNewsletter Boolean @default(false)  // Newsletter management
+  canManagePorts      Boolean @default(false)  // Port database (NGA WPI)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// NEWSLETTER SUBSCRIBERS
+// ═══════════════════════════════════════════════════════════════════
+
+model NewsletterSubscriber {
+  id               String    @id @default(cuid())
+  email            String    @unique
+  name             String?
+  unsubscribeToken String    @unique @default(cuid())
+  confirmToken     String?   @unique @default(cuid())
+  confirmedAt      DateTime?
+  isActive         Boolean   @default(false)
+  source           String    @default("website")
+  subscribedAt     DateTime  @default(now())
+  unsubscribedAt   DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// VISITOR ANALYTICS
+// ═══════════════════════════════════════════════════════════════════
+
+model PageView {
+  id          String   @id @default(cuid())
+  path        String   // e.g., "/", "/pages/contact"
+  ip          String?  // visitor IP (hashed for privacy)
+  country     String?  // e.g., "United States"
+  countryCode String?  // e.g., "US"
+  city        String?  // e.g., "New York"
+  region      String?  // e.g., "New York"
+  timezone    String?  // e.g., "America/New_York"
+  org         String?  // ISP/company e.g., "AS14061 DigitalOcean"
+  latitude    Float?
+  longitude   Float?
+  userAgent   String?  // raw UA string
+  device      String?  // "desktop" | "mobile" | "tablet"
+  browser     String?  // e.g., "Chrome 120"
+  os          String?  // e.g., "Windows 11"
+  referrer    String?  // where they came from
+  createdAt   DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([path])
+  @@index([countryCode])
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// USER BEHAVIOR TRACKING
+// ═══════════════════════════════════════════════════════════════════
+
+model ActivityEvent {
+  id        String   @id @default(cuid())
+  userId    String   // Clerk user ID
+  orgId     String?  // Organization ID (null for non-org actions)
+  event     String   // "page_view" | "action" | "login" | "session_start"
+  feature   String   // "route_planner" | "fleet_schedule" | "ais_dashboard" | "market_data" | "vessel_profiles" | "voyage_management" | "settings" | "admin" | "dashboard" | "general"
+  action    String?  // Specific action: "create_voyage" | "view_route" | "update_vessel" etc.
+  path      String?  // Page path
+  metadata  String?  // JSON string for extra context
+  duration  Int?     // Time spent in seconds (for session tracking)
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([orgId])
+  @@index([feature])
+  @@index([createdAt])
+  @@index([userId, feature])
+  @@index([orgId, createdAt])
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// MARITIME INTELLIGENCE (Admin-Managed Static Data)
+// Singleton — stores periodically-updated industry benchmarks
+// for canal tolls, war risk, hull values, commodity values, etc.
+// ═══════════════════════════════════════════════════════════════════
+
+model MaritimeIntelligence {
+  id    String @id @default("maritime_intelligence")
+
+  // ═══════════════════════════════════════════════════════════════
+  // CANAL TARIFF RATES
+  // Source: Suez Canal Authority, Panama Canal Authority, WSV Germany
+  // Update: ~1-2x per year when canal authorities publish new circulars
+  // ═══════════════════════════════════════════════════════════════
+
+  // Suez Canal — Tiered SCNT rates ($/SCNT)
+  suezTier1Rate         Float @default(7.88)   // 0–5,000 SCNT
+  suezTier2Rate         Float @default(6.30)   // 5,001–10,000
+  suezTier3Rate         Float @default(5.04)   // 10,001–20,000
+  suezTier4Rate         Float @default(4.41)   // 20,001–30,000
+  suezTier5Rate         Float @default(3.78)   // 30,000+
+  suezBallastDiscount   Float @default(50)     // % discount for ballast passage
+  suezTankerSurcharge   Float @default(10)     // % surcharge for tankers
+
+  // Panama Canal — Tiered NT rates ($/NT)
+  panamaTier1Rate       Float @default(5.40)   // 0–10,000 NT
+  panamaTier2Rate       Float @default(4.32)   // 10,001–20,000
+  panamaTier3Rate       Float @default(3.78)   // 20,000+
+  panamaContainerPanamax    Float @default(95)   // $/TEU (Panamax locks)
+  panamaContainerNeopanamax Float @default(110)  // $/TEU (Neopanamax locks)
+
+  // Kiel Canal (EUR per 1000 GT, converted to USD via eurUsdRate)
+  kielRatePer1000GT     Float @default(45)     // EUR/1000 GT
+
+  // ═══════════════════════════════════════════════════════════════
+  // WAR RISK & PIRACY INTELLIGENCE
+  // Source: IMB Piracy Reporting Centre, Joint War Committee (JWC)
+  // Update: ~1-2x per year (IMB annual report, JWC listed areas)
+  // ═══════════════════════════════════════════════════════════════
+
+  // Gulf of Aden HRA
+  gulfAdenRiskScore       Int    @default(8)           // 1-10
+  gulfAdenRiskLevel       String @default("HIGH")      // LOW | MODERATE | HIGH | CRITICAL
+  gulfAdenIncidents12m    Int    @default(23)           // Incidents in last 12 months
+  gulfAdenWarRiskRate     Float  @default(0.035)        // % of hull value per transit
+  gulfAdenArmedGuards     String @default("RECOMMENDED") // NONE | RECOMMENDED | MANDATORY
+
+  // West Africa HRA
+  westAfricaRiskScore     Int    @default(7)
+  westAfricaRiskLevel     String @default("HIGH")
+  westAfricaIncidents12m  Int    @default(35)
+  westAfricaWarRiskRate   Float  @default(0.025)
+  westAfricaArmedGuards   String @default("RECOMMENDED")
+
+  // Strait of Malacca HRA
+  malaccaRiskScore        Int    @default(4)
+  malaccaRiskLevel        String @default("MODERATE")
+  malaccaIncidents12m     Int    @default(8)
+  malaccaWarRiskRate      Float  @default(0.015)
+  malaccaArmedGuards      String @default("NONE")
+
+  // ═══════════════════════════════════════════════════════════════
+  // HULL VALUE BENCHMARKS (by Vessel Type)
+  // Source: VesselsValue, Clarksons, S&P market intelligence
+  // Update: Quarterly
+  // ═══════════════════════════════════════════════════════════════
+
+  hullValueCapesize         Float @default(55000000)
+  hullValuePanamax          Float @default(35000000)
+  hullValueSupramax         Float @default(28000000)
+  hullValueHandysize        Float @default(22000000)
+  hullValueVLCC             Float @default(120000000)
+  hullValueSuezmax          Float @default(70000000)
+  hullValueAframax          Float @default(55000000)
+  hullValueMRTanker         Float @default(40000000)
+  hullValueLNGCarrier       Float @default(200000000)
+  hullValueContainerFeeder  Float @default(25000000)
+  hullValueContainerPanamax Float @default(45000000)
+  hullValueGeneralCargo     Float @default(18000000)
+  hullValueAgeDepreciation  Float @default(3.0)         // % per year
+  hullValueMinAgeFactor     Float @default(0.50)         // Floor factor (50%)
+
+  // ═══════════════════════════════════════════════════════════════
+  // COMMODITY VALUES ($/MT for Cargo-at-Risk calculations)
+  // Source: Platts, Reuters, CBOT, commodity exchanges
+  // Update: Monthly to Quarterly
+  // ═══════════════════════════════════════════════════════════════
+
+  commodityIronOre        Float @default(120)
+  commodityCoalThermal    Float @default(150)
+  commodityCoalCoking     Float @default(280)
+  commodityGrainWheat     Float @default(350)
+  commodityGrainCorn      Float @default(250)
+  commoditySoybeans       Float @default(450)
+  commodityCrudeOil       Float @default(550)
+  commodityCleanProducts  Float @default(700)
+  commodityLNG            Float @default(800)
+  commodityLPG            Float @default(500)
+  commoditySteel          Float @default(700)
+  commodityFertilizer     Float @default(400)
+  commodityCement         Float @default(100)
+  commodityContainerAvg   Float @default(35000)         // avg value per TEU
+  commodityDefault        Float @default(300)            // fallback $/MT
+
+  // ═══════════════════════════════════════════════════════════════
+  // PORT CONGESTION PROFILES (avg wait days)
+  // Source: Broker intelligence, MarineTraffic reports
+  // Update: Quarterly to Semi-annually
+  // ═══════════════════════════════════════════════════════════════
+
+  congestionChinaQingdao     Float @default(3.5)
+  congestionChinaTianjin     Float @default(4.0)
+  congestionChinaQinhuangdao Float @default(5.0)
+  congestionAustNewcastle    Float @default(2.0)
+  congestionAustPortHedland  Float @default(1.5)
+  congestionBrazilSantos     Float @default(3.0)
+  congestionBrazilTubarao    Float @default(2.5)
+  congestionIndiaMundra      Float @default(2.0)
+  congestionIndiaKandla      Float @default(3.0)
+  congestionUSGulfHouston    Float @default(2.0)
+  congestionRotterdam        Float @default(0.5)
+  congestionSingapore        Float @default(1.0)
+
+  // ═══════════════════════════════════════════════════════════════
+  // CURRENCY RATES
+  // Source: ECB, Federal Reserve (manual for now, API-able later)
+  // Update: Weekly to Monthly
+  // ═══════════════════════════════════════════════════════════════
+
+  eurUsdRate              Float @default(1.08)
+  gbpUsdRate              Float @default(1.27)
+  nokUsdRate              Float @default(0.093)
+
+  // ─── Audit ─────────────────────────────────────────────────
+  lastUpdatedAt           DateTime @updatedAt
+  updatedBy               String?
+}

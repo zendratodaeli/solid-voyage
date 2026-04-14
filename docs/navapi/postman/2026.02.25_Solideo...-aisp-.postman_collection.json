@@ -1,0 +1,755 @@
+{
+  "info": {
+    "_postman_id": "6fe0c8cc-0719-4ecd-8492-832e2187a559",
+    "name": "2026.02.25_Solideo.../aisp/",
+    "description": "NavAPI AIS Positions API Trial.\n\nClick on each endpoint request to see the API in action.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_exporter_id": "25297648"
+  },
+  "item": [
+    {
+      "name": "ApiKeyStatus",
+      "item": [
+        {
+          "name": "ApiKeyStatus",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://v1.navapi.pro/acnt/view/ApiKeyStatus",
+              "protocol": "https",
+              "host": [
+                "v1",
+                "navapi",
+                "pro"
+              ],
+              "path": [
+                "acnt",
+                "view",
+                "ApiKeyStatus"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "ShipSearch",
+      "item": [
+        {
+          "name": "ShipSearch by Name",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://v1.navapi.pro/aisp/autc/ShipSearch?Q=adamastos",
+              "protocol": "https",
+              "host": [
+                "v1",
+                "navapi",
+                "pro"
+              ],
+              "path": [
+                "aisp",
+                "autc",
+                "ShipSearch"
+              ],
+              "query": [
+                {
+                  "key": "Q",
+                  "value": "adamastos"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "ShipSearch by MMSI",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://v1.navapi.pro/aisp/autc/ShipSearch?Q=538008785",
+              "protocol": "https",
+              "host": [
+                "v1",
+                "navapi",
+                "pro"
+              ],
+              "path": [
+                "aisp",
+                "autc",
+                "ShipSearch"
+              ],
+              "query": [
+                {
+                  "key": "Q",
+                  "value": "538008785"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "ShipSearch by IMO",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://v1.navapi.pro/aisp/autc/ShipSearch?Q=9535175",
+              "protocol": "https",
+              "host": [
+                "v1",
+                "navapi",
+                "pro"
+              ],
+              "path": [
+                "aisp",
+                "autc",
+                "ShipSearch"
+              ],
+              "query": [
+                {
+                  "key": "Q",
+                  "value": "9535175"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "ShipSearch by Call Sign",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://v1.navapi.pro/aisp/autc/ShipSearch?Q=cq2203",
+              "protocol": "https",
+              "host": [
+                "v1",
+                "navapi",
+                "pro"
+              ],
+              "path": [
+                "aisp",
+                "autc",
+                "ShipSearch"
+              ],
+              "query": [
+                {
+                  "key": "Q",
+                  "value": "cq2203"
+                }
+              ]
+            }
+          },
+          "response": []
+        }
+      ],
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "packages": {},
+            "exec": [
+              ""
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "packages": {},
+            "exec": [
+              ""
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "LastPosition",
+      "item": [
+        {
+          "name": "LastPosition by Name",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://v1.navapi.pro/aisp/svsl/LastPosition?Name=BBC Moonstone&Imo=&Mmsi=",
+              "protocol": "https",
+              "host": [
+                "v1",
+                "navapi",
+                "pro"
+              ],
+              "path": [
+                "aisp",
+                "svsl",
+                "LastPosition"
+              ],
+              "query": [
+                {
+                  "key": "Name",
+                  "value": "BBC Moonstone"
+                },
+                {
+                  "key": "Imo",
+                  "value": ""
+                },
+                {
+                  "key": "Mmsi",
+                  "value": ""
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "LastPosition by MMSI",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://v1.navapi.pro/aisp/svsl/LastPosition?MMSI=636023325",
+              "protocol": "https",
+              "host": [
+                "v1",
+                "navapi",
+                "pro"
+              ],
+              "path": [
+                "aisp",
+                "svsl",
+                "LastPosition"
+              ],
+              "query": [
+                {
+                  "key": "MMSI",
+                  "value": "636023325"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "LastPosition by IMO",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://v1.navapi.pro/aisp/svsl/LastPosition?IMO=9956616",
+              "protocol": "https",
+              "host": [
+                "v1",
+                "navapi",
+                "pro"
+              ],
+              "path": [
+                "aisp",
+                "svsl",
+                "LastPosition"
+              ],
+              "query": [
+                {
+                  "key": "IMO",
+                  "value": "9956616"
+                }
+              ]
+            }
+          },
+          "response": []
+        }
+      ],
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "packages": {},
+            "exec": [
+              ""
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "packages": {},
+            "exec": [
+              ""
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "FleetPositions",
+      "item": [
+        {
+          "name": "FleetPositions by MMSI",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  ""
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n\"MmsiNumbers\": [\"304200000\",\"352002945\",\"305404000\",\"565227000\",\"310806000\",\"305469000\",\"257312000\",\"257307000\",\"311000458\",\"231123000\"] \r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "https://v1.navapi.pro/aisp/mvsl/FleetPositions",
+              "protocol": "https",
+              "host": [
+                "v1",
+                "navapi",
+                "pro"
+              ],
+              "path": [
+                "aisp",
+                "mvsl",
+                "FleetPositions"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "FleetPositions by IMO",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  ""
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n\"ImoNumbers\": [\"9362633\",\"9968970\",\"9435868\",\"9431460\",\"9864928\",\"9468085\",\"8915524\",\"9393917\",\"9736810\",\"9433456\"]\r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "https://v1.navapi.pro/aisp/mvsl/FleetPositions",
+              "protocol": "https",
+              "host": [
+                "v1",
+                "navapi",
+                "pro"
+              ],
+              "path": [
+                "aisp",
+                "mvsl",
+                "FleetPositions"
+              ]
+            }
+          },
+          "response": []
+        }
+      ],
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "packages": {},
+            "exec": [
+              ""
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "packages": {},
+            "exec": [
+              ""
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "HistoricalTracks",
+      "item": [
+        {
+          "name": "HistoricalTracks by MMSI",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n \"MmsiNumber\":\"241662000\",\r\n \"HistoryFrom\":\"2026-01-01T00:01:00Z\",\r\n \"HistoryUntil\" :\"2026-01-27T23:59:00Z\"\r\n}\r\n",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "https://v1.navapi.pro/aisp/svsl/HistoricalTracks",
+              "protocol": "https",
+              "host": [
+                "v1",
+                "navapi",
+                "pro"
+              ],
+              "path": [
+                "aisp",
+                "svsl",
+                "HistoricalTracks"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "HistoricalTracks by IMO",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n \"ImoNumber\":\"9380673\",\r\n \"HistoryFrom\":\"2025-09-01T00:01:00Z\",\r\n \"HistoryUntil\":\"2025-09-20T23:59:00Z\"\r\n}\r\n",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "https://v1.navapi.pro/aisp/svsl/HistoricalTracks",
+              "protocol": "https",
+              "host": [
+                "v1",
+                "navapi",
+                "pro"
+              ],
+              "path": [
+                "aisp",
+                "svsl",
+                "HistoricalTracks"
+              ]
+            }
+          },
+          "response": []
+        }
+      ],
+      "auth": {
+        "type": "bearer",
+        "bearer": [
+          {
+            "key": "token",
+            "value": "1f9590df1f6d076b5e9b851ca0b967b81769529414087",
+            "type": "string"
+          }
+        ]
+      },
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "packages": {},
+            "requests": {},
+            "exec": [
+              ""
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "packages": {},
+            "requests": {},
+            "exec": [
+              ""
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "WithinRange",
+      "item": [
+        {
+          "name": "WithinRange All Filters",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://v1.navapi.pro/aisp/mvsl/WithinRange?Lat=37.6215&Lon=11.0235&Km=50&ShipType=70,80&NavStatus=0,1,2,3,4,5,6,7,8",
+              "protocol": "https",
+              "host": [
+                "v1",
+                "navapi",
+                "pro"
+              ],
+              "path": [
+                "aisp",
+                "mvsl",
+                "WithinRange"
+              ],
+              "query": [
+                {
+                  "key": "Lat",
+                  "value": "37.6215"
+                },
+                {
+                  "key": "Lon",
+                  "value": "11.0235"
+                },
+                {
+                  "key": "Km",
+                  "value": "50"
+                },
+                {
+                  "key": "ShipType",
+                  "value": "70,80"
+                },
+                {
+                  "key": "NavStatus",
+                  "value": "0,1,2,3,4,5,6,7,8"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "WithinRange ShipType Filter",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://v1.navapi.pro/aisp/mvsl/WithinRange?Lat=37.6215&Lon=11.0235&Km=50&ShipType=70,80",
+              "protocol": "https",
+              "host": [
+                "v1",
+                "navapi",
+                "pro"
+              ],
+              "path": [
+                "aisp",
+                "mvsl",
+                "WithinRange"
+              ],
+              "query": [
+                {
+                  "key": "Lat",
+                  "value": "37.6215"
+                },
+                {
+                  "key": "Lon",
+                  "value": "11.0235"
+                },
+                {
+                  "key": "Km",
+                  "value": "50"
+                },
+                {
+                  "key": "ShipType",
+                  "value": "70,80"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "WithinRange NavStatus Filter",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://v1.navapi.pro/aisp/mvsl/WithinRange?Lat=37.6215&Lon=11.0235&Km=50&NavStatus=0,1,2,3,4,5,6,7,8",
+              "protocol": "https",
+              "host": [
+                "v1",
+                "navapi",
+                "pro"
+              ],
+              "path": [
+                "aisp",
+                "mvsl",
+                "WithinRange"
+              ],
+              "query": [
+                {
+                  "key": "Lat",
+                  "value": "37.6215"
+                },
+                {
+                  "key": "Lon",
+                  "value": "11.0235"
+                },
+                {
+                  "key": "Km",
+                  "value": "50"
+                },
+                {
+                  "key": "NavStatus",
+                  "value": "0,1,2,3,4,5,6,7,8"
+                }
+              ]
+            }
+          },
+          "response": []
+        }
+      ],
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "packages": {},
+            "exec": [
+              ""
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "packages": {},
+            "exec": [
+              ""
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "FindByDestination",
+      "item": [
+        {
+          "name": "/aisp/mvsl/FindByDestination",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{ \r\n  \"DestDeclared\": [\"DEHAM\",\"Hamburg\",\"Haburg\",\"Piraeus\",\"Pireas\",\"Pirevs\",\"GRPIR\"],\r\n  \"EtaFrom\": \"2026-02-04T00:00:01Z\",\r\n  \"EtaUntil\": \"2026-02-28T23:59:00Z\",\r\n  \"ShipType\": \"70,80\"\r\n} \r\n",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "https://v1.navapi.pro/aisp/mvsl/FindByDestination",
+              "protocol": "https",
+              "host": [
+                "v1",
+                "navapi",
+                "pro"
+              ],
+              "path": [
+                "aisp",
+                "mvsl",
+                "FindByDestination"
+              ]
+            }
+          },
+          "response": []
+        }
+      ],
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "packages": {},
+            "exec": [
+              ""
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "packages": {},
+            "exec": [
+              ""
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "29608fcfebe5855632b13a7ffc0ba79c1772020272281",
+        "type": "string"
+      }
+    ]
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "packages": {},
+        "requests": {},
+        "exec": [
+          ""
+        ]
+      }
+    },
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "packages": {},
+        "requests": {},
+        "exec": [
+          ""
+        ]
+      }
+    }
+  ]
+}
