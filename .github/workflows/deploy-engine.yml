@@ -1,0 +1,62 @@
+name: Deploy Weather Engine to Hetzner
+
+# Triggers on every push to main that touches engine files
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'engine/**'
+
+jobs:
+  deploy:
+    name: Deploy to Hetzner
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy to Hetzner via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: 195.201.27.96
+          username: root
+          key: ${{ secrets.HETZNER_SSH_KEY }}
+          port: 22
+          script_stop: true
+          # Timeout per command
+          command_timeout: 10m
+          script: |
+            echo "=== Solid Voyage Engine Deploy ==="
+            echo "Triggered by: GitHub Actions"
+            echo "Time: $(date -u)"
+
+            # Navigate to engine directory
+            cd /root/solid-voyage/engine
+
+            # Pull latest code from GitHub (repo is public)
+            echo "--- Pulling latest code ---"
+            git pull https://github.com/zendratodaeli/solid-voyage.git main
+
+            # Detect if Dockerfile or requirements changed (needs full rebuild)
+            # vs Python-only changes (just restart)
+            CHANGED_FILES=$(git diff HEAD~1 --name-only 2>/dev/null || echo "")
+
+            if echo "$CHANGED_FILES" | grep -qE "Dockerfile|requirements\.txt"; then
+              echo "--- Dockerfile/requirements changed: full rebuild ---"
+              docker compose down
+              docker compose build --no-cache
+              docker compose up -d
+            else
+              echo "--- Python-only changes: fast restart ---"
+              docker compose down
+              docker compose up -d
+            fi
+
+            echo "--- Waiting for engine to be healthy ---"
+            sleep 15
+            curl -sf http://localhost:8001/health && echo "✅ Engine healthy" || echo "⚠️ Health check failed"
+
+            echo "--- Recent logs ---"
+            docker compose logs --tail=20
