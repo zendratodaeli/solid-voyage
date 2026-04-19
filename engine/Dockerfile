@@ -1,5 +1,6 @@
 # Solid Vision — Weather Routing Engine (Production)
-# With eccodes C library for real NOAA GRIB/NetCDF parsing
+# With eccodes C library for real NOAA GRIB/NetCDF + ECMWF Open Data parsing
+# Version: 1.1.0 — ECMWF IFS+WAM integrated
 
 FROM python:3.12-slim
 
