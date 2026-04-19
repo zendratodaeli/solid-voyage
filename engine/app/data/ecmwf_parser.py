@@ -70,6 +70,7 @@ class ECMWFStore:
         self.wave_height: Optional[np.ndarray] = None    # m
         self.wave_period: Optional[np.ndarray] = None    # s
         self.wave_direction: Optional[np.ndarray] = None # degrees
+        self.swell_height: Optional[np.ndarray] = None   # Not in ECMWF free tier (only combined SWH)
 
     def load(self, ecmwf_dir: str) -> bool:
         """
