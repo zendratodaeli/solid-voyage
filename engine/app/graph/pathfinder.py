@@ -16,6 +16,7 @@ from app.graph.builder import build_ocean_graph
 from app.data.parser import load_weather_data
 from app.config import (
     GRID_RESOLUTION,
+    FORECAST_RESOLUTION,
     DEFAULT_VESSEL_SPEED_KNOTS,
     DEFAULT_DAILY_CONSUMPTION_MT,
     SOLAS_DISCLAIMER,
@@ -31,12 +32,15 @@ class OceanRouter:
     The graph is built once from weather data and held in memory.
     Route queries are served from this in-memory graph with sub-second latency.
     The graph is atomically replaced when new weather data arrives.
+
+    Also maintains a ForecastStore for multi-step forecast time series.
     """
 
     def __init__(self):
         self.graph: Optional[nx.Graph] = None
         self.build_timestamp: Optional[str] = None
         self._building = False
+        self.forecast_store = None  # Will hold multi-step forecast data
 
     @property
     def is_ready(self) -> bool:
@@ -47,25 +51,44 @@ class OceanRouter:
         """
         Build the ocean graph from weather data + ice data.
 
-        If weather_data is None, generates synthetic climatological data.
-        Ice data is loaded automatically (synthetic seasonal patterns).
-        This method performs an atomic swap: the old graph continues serving
-        requests until the new one is fully built.
+        On each rebuild cycle:
+        1. Downloads fresh NOAA data (GFS wind, WW3 waves, RTOFS currents)
+        2. Downloads multi-step GFS/WW3 forecast (57 steps, 7 days)
+        3. Downloads USNIC ice shapefiles and IIP iceberg positions
+        4. Parses GRIB/NetCDF files into numpy arrays (falls back to synthetic)
+        5. Builds the NetworkX graph with weather-based edge weights
+        6. Builds the ForecastStore for time series queries
+        7. Atomically swaps the old graph for the new one (zero downtime)
         """
         self._building = True
         logger.info("Starting ocean graph build...")
 
         try:
-            # Load weather data
             if weather_data is None:
-                weather_data = load_weather_data()
+                # Download fresh NOAA data
+                from app.data.downloader import download_all_data
+                downloaded = download_all_data()
 
-            # Load ice data (seasonal, based on current month)
+                # Parse downloaded files into numpy arrays
+                # (automatically falls back to synthetic for any missing source)
+                weather_data = load_weather_data(grib_paths=downloaded)
+
+                # Store download results for the /health endpoint
+                self._last_download = downloaded
+            else:
+                self._last_download = None
+                downloaded = None
+
+            # Load ice data — try downloading real USNIC shapefiles
             from app.data.ice import load_ice_data
-            ice_data = load_ice_data()
+            ice_data = load_ice_data(try_download=True)
+            self._ice_data = ice_data  # Store for /ice-grid endpoint
 
             # Build the new graph with weather + ice
             new_graph = build_ocean_graph(weather_data, vessel_speed, ice_data=ice_data)
+
+            # Store parsed data for the /conditions and /ice-grid endpoints
+            self._weather_data = weather_data
 
             # Atomic swap
             self.graph = new_graph
@@ -77,11 +100,315 @@ class OceanRouter:
                 f"{self.graph.number_of_edges():,} edges"
             )
 
+            # Build forecast store (non-blocking — graph is already ready for routing)
+            if downloaded:
+                self._build_forecast_store(downloaded)
+
         except Exception as e:
             logger.error(f"❌ Graph build failed: {e}")
             raise
         finally:
             self._building = False
+
+    def _build_forecast_store(self, downloaded: dict):
+        """
+        Build the ForecastStore from downloaded multi-step GRIB files.
+        This runs AFTER the graph is ready, so it doesn't block routing.
+        """
+        try:
+            from app.data.forecast_parser import ForecastStore, parse_multistep_grib
+            from app.data.parser import parse_rtofs_netcdf
+
+            store = ForecastStore()
+
+            cycle_date = downloaded.get("cycle_date", "")
+            cycle_run = downloaded.get("cycle_run", "00")
+            store.build_timestamps(cycle_date, cycle_run)
+
+            n_lat, n_lon = store.n_lat, store.n_lon
+
+            # --- Parse GFS multi-step forecast ---
+            gfs_forecast = downloaded.get("gfs_forecast", {})
+            gfs_paths = gfs_forecast.get("gfs_forecast_paths", {})
+
+            if gfs_paths:
+                logger.info(f"Parsing GFS forecast ({len(gfs_paths)} steps)...")
+
+                # GFS files contain multiple variables — we need to parse each separately
+                # For now, parse the combined file and extract wind U/V, pressure, visibility
+                # Since each file contains all 4 variables, we parse per-variable using
+                # the first data var (index 0 = UGRD, 1 = VGRD, etc.)
+                wind_u_paths = {}
+                wind_v_paths = {}
+                pressure_paths = {}
+                visibility_paths = {}
+
+                for hour, path in gfs_paths.items():
+                    # Each GFS file has 4 messages (UGRD, VGRD, PRMSL, VIS)
+                    # We'll parse each separately by creating per-variable GRIB extracts
+                    wind_u_paths[hour] = path
+                    wind_v_paths[hour] = path
+                    pressure_paths[hour] = path
+                    visibility_paths[hour] = path
+
+                # Parse each variable using xarray (it reads the first variable by default)
+                # We need to use message-based access
+                store.wind_u = self._parse_gfs_variable(gfs_paths, "u10", n_lat, n_lon)
+                store.wind_v = self._parse_gfs_variable(gfs_paths, "v10", n_lat, n_lon)
+                store.pressure = self._parse_gfs_variable(gfs_paths, "prmsl", n_lat, n_lon)
+                store.visibility = self._parse_gfs_variable(gfs_paths, "vis", n_lat, n_lon)
+
+                store.sources["wind"] = "NOAA GFS 0.25°"
+                store.sources["pressure"] = "NOAA GFS 0.25°"
+                store.sources["visibility"] = "NOAA GFS 0.25°"
+
+            # --- Parse WW3 multi-step forecast ---
+            ww3_forecast = downloaded.get("ww3_forecast", {})
+            ww3_paths = ww3_forecast.get("ww3_forecast_paths", {})
+
+            if ww3_paths:
+                logger.info(f"Parsing WW3 forecast ({len(ww3_paths)} steps)...")
+
+                store.wave_height = self._parse_ww3_variable(ww3_paths, "swh", n_lat, n_lon)
+                store.wave_period = self._parse_ww3_variable(ww3_paths, "perpw", n_lat, n_lon)
+                store.wave_direction = self._parse_ww3_variable(ww3_paths, "dirpw", n_lat, n_lon)
+                store.wind_wave_height = self._parse_ww3_variable(ww3_paths, "shww", n_lat, n_lon)
+                store.swell_height = self._parse_ww3_variable(ww3_paths, "swell", n_lat, n_lon)
+
+                store.sources["waves"] = "NOAA WW3 0.25°"
+
+            # --- Parse OISST ---
+            oisst_data = downloaded.get("oisst", {})
+            if oisst_data.get("oisst_nc_path"):
+                store.sst_oisst = self._parse_oisst(oisst_data["oisst_nc_path"], n_lat, n_lon)
+                if store.sst_oisst is not None:
+                    store.sources["sst_satellite"] = "NOAA OISST v2.1"
+
+            # --- Parse RTOFS SST ---
+            rtofs_data = downloaded.get("rtofs", {})
+            if rtofs_data.get("rtofs_nc_path"):
+                store.sst_rtofs = self._parse_rtofs_sst(rtofs_data["rtofs_nc_path"], n_lat, n_lon)
+                if store.sst_rtofs is not None:
+                    store.sources["sst_forecast"] = "NOAA RTOFS"
+
+            store.is_ready = True
+            self.forecast_store = store
+
+            logger.info(
+                f"✅ ForecastStore ready — "
+                f"{store.n_steps} steps, "
+                f"{store.n_lat}×{store.n_lon} grid, "
+                f"sources: {store.sources}"
+            )
+
+        except Exception as e:
+            logger.error(f"⚠️ ForecastStore build failed (routing unaffected): {e}")
+            import traceback
+            traceback.print_exc()
+
+    def _parse_gfs_variable(
+        self, file_paths: dict, var_key: str, n_lat: int, n_lon: int
+    ) -> Optional[np.ndarray]:
+        """Parse a specific variable from multi-step GFS GRIB files."""
+        try:
+            import xarray as xr
+            from app.config import FORECAST_HOURS
+
+            n_steps = len(FORECAST_HOURS)
+            result = np.full((n_steps, n_lat, n_lon), np.nan, dtype=np.float32)
+            parsed = 0
+
+            # Map var_key to cfgrib filter keys
+            var_filters = {
+                "u10": {"shortName": "10u"},
+                "v10": {"shortName": "10v"},
+                "prmsl": {"shortName": "prmsl"},
+                "vis": {"shortName": "vis"},
+            }
+            filter_keys = var_filters.get(var_key, {})
+
+            for step_idx, hour in enumerate(FORECAST_HOURS):
+                path = file_paths.get(hour)
+                if not path:
+                    continue
+                try:
+                    ds = xr.open_dataset(
+                        path, engine="cfgrib",
+                        backend_kwargs={"filter_by_keys": filter_keys}
+                    )
+                    data = list(ds.data_vars.values())[0].values.astype(np.float32)
+                    ds.close()
+
+                    # Resample if needed
+                    if data.shape != (n_lat, n_lon):
+                        from scipy.ndimage import zoom
+                        data = zoom(data, (n_lat / data.shape[0], n_lon / data.shape[1]), order=1).astype(np.float32)
+
+                    result[step_idx] = np.nan_to_num(data, nan=0.0)
+                    parsed += 1
+                except Exception:
+                    continue
+
+            logger.info(f"GFS {var_key}: parsed {parsed}/{n_steps} steps")
+            return result if parsed > 0 else None
+
+        except ImportError:
+            logger.warning("xarray/cfgrib not available for GFS forecast parsing")
+            return None
+
+    def _parse_ww3_variable(
+        self, file_paths: dict, var_key: str, n_lat: int, n_lon: int
+    ) -> Optional[np.ndarray]:
+        """Parse a specific variable from multi-step WW3 GRIB files."""
+        try:
+            import xarray as xr
+            from app.config import FORECAST_HOURS
+
+            n_steps = len(FORECAST_HOURS)
+            result = np.full((n_steps, n_lat, n_lon), np.nan, dtype=np.float32)
+            parsed = 0
+
+            var_filters = {
+                "swh": {"shortName": "swh"},
+                "perpw": {"shortName": "perpw"},
+                "dirpw": {"shortName": "dirpw"},
+                "shww": {"shortName": "shww"},
+                "swell": {"shortName": "swh", "typeOfLevel": "orderedSequence"},
+            }
+            filter_keys = var_filters.get(var_key, {})
+
+            for step_idx, hour in enumerate(FORECAST_HOURS):
+                path = file_paths.get(hour)
+                if not path:
+                    continue
+                try:
+                    ds = xr.open_dataset(
+                        path, engine="cfgrib",
+                        backend_kwargs={"filter_by_keys": filter_keys}
+                    )
+                    data = list(ds.data_vars.values())[0].values.astype(np.float32)
+                    ds.close()
+
+                    if data.shape != (n_lat, n_lon):
+                        from scipy.ndimage import zoom
+                        data = zoom(data, (n_lat / data.shape[0], n_lon / data.shape[1]), order=1).astype(np.float32)
+
+                    result[step_idx] = np.nan_to_num(data, nan=0.0)
+                    parsed += 1
+                except Exception:
+                    continue
+
+            logger.info(f"WW3 {var_key}: parsed {parsed}/{n_steps} steps")
+            return result if parsed > 0 else None
+
+        except ImportError:
+            logger.warning("xarray/cfgrib not available for WW3 forecast parsing")
+            return None
+
+    def _parse_oisst(self, nc_path: str, n_lat: int, n_lon: int) -> Optional[np.ndarray]:
+        """Parse NOAA OISST NetCDF into a 2D SST array."""
+        try:
+            import xarray as xr
+            from scipy.ndimage import zoom
+
+            ds = xr.open_dataset(nc_path)
+            # OISST variable is 'sst' with dimensions (time, zlev, lat, lon)
+            sst = ds["sst"].isel(time=0, zlev=0).values.astype(np.float32)
+            ds.close()
+
+            sst = np.nan_to_num(sst, nan=0.0)
+
+            if sst.shape != (n_lat, n_lon):
+                sst = zoom(sst, (n_lat / sst.shape[0], n_lon / sst.shape[1]), order=1).astype(np.float32)
+
+            logger.info(f"Parsed OISST: shape {sst.shape}, range {sst.min():.1f}–{sst.max():.1f}°C")
+            return sst
+
+        except Exception as e:
+            logger.warning(f"OISST parsing failed: {e}")
+            return None
+
+    def _parse_rtofs_sst(self, nc_path: str, n_lat: int, n_lon: int) -> Optional[np.ndarray]:
+        """Extract SST from the RTOFS diagnostic NetCDF file."""
+        try:
+            import xarray as xr
+            from scipy.interpolate import griddata
+
+            ds = xr.open_dataset(nc_path)
+
+            # RTOFS SST variable
+            sst_var = None
+            for name in ['sst', 'SST', 'sea_surface_temperature', 'temperature']:
+                if name in ds.data_vars:
+                    sst_var = name
+                    break
+
+            if sst_var is None:
+                ds.close()
+                return None
+
+            sst_data = ds[sst_var]
+            if sst_data.ndim > 2:
+                sst_data = sst_data.isel({
+                    dim: 0 for dim in sst_data.dims
+                    if dim not in ['lat', 'latitude', 'Latitude', 'Y', 'y',
+                                   'lon', 'longitude', 'Longitude', 'X', 'x']
+                })
+
+            sst_raw = sst_data.values.astype(np.float32)
+
+            # Check for 2D coordinates (tripolar grid)
+            lat_2d = None
+            for name in ['Latitude', 'latitude', 'lat']:
+                if name in ds.coords or name in ds.data_vars:
+                    arr = ds[name].values
+                    if arr.ndim == 2:
+                        lat_2d = arr
+                        break
+
+            lon_2d = None
+            for name in ['Longitude', 'longitude', 'lon']:
+                if name in ds.coords or name in ds.data_vars:
+                    arr = ds[name].values
+                    if arr.ndim == 2:
+                        lon_2d = arr
+                        break
+
+            ds.close()
+
+            if lat_2d is not None and lon_2d is not None:
+                # Tripolar grid — regrid to regular grid
+                from app.config import LAT_MIN, LAT_MAX, LON_MIN, LON_MAX
+                target_lats = np.arange(LAT_MIN, LAT_MAX, GRID_RESOLUTION)
+                target_lons = np.arange(LON_MIN, LON_MAX, GRID_RESOLUTION)
+                target_lon_grid, target_lat_grid = np.meshgrid(target_lons, target_lats)
+
+                flat_lat = lat_2d.ravel()
+                flat_lon = np.where(lon_2d.ravel() > 180, lon_2d.ravel() - 360, lon_2d.ravel())
+                flat_sst = np.nan_to_num(sst_raw.ravel(), nan=0.0)
+
+                valid = (np.abs(flat_lat) <= 90) & (np.abs(flat_lon) <= 180) & np.isfinite(flat_lat)
+                src_points = np.column_stack([flat_lat[valid], flat_lon[valid]])
+
+                step = 4
+                sst_result = griddata(
+                    src_points[::step], flat_sst[valid][::step],
+                    np.column_stack([target_lat_grid.ravel(), target_lon_grid.ravel()]),
+                    method='nearest', fill_value=0.0
+                )
+                sst_result = sst_result.reshape(target_lat_grid.shape).astype(np.float32)
+            else:
+                from scipy.ndimage import zoom
+                sst_result = np.nan_to_num(sst_raw, nan=0.0)
+                if sst_result.shape != (n_lat, n_lon):
+                    sst_result = zoom(sst_result, (n_lat / sst_result.shape[0], n_lon / sst_result.shape[1]), order=1).astype(np.float32)
+
+            logger.info(f"Parsed RTOFS SST: shape {sst_result.shape}")
+            return sst_result
+
+        except Exception as e:
+            logger.warning(f"RTOFS SST parsing failed: {e}")
+            return None
 
     def _snap_to_grid(self, lat: float, lon: float) -> tuple[float, float]:
         """
@@ -315,8 +642,11 @@ class OceanRouter:
         if land_mask[lat_idx, lon_idx]:
             return {"is_ocean": False, "advisory": "Location is on land — no marine data"}
 
-        # Load current weather data
-        weather_data = load_weather_data()
+        # Use the stored NOAA-parsed weather data (not re-loading from file)
+        weather_data = getattr(self, '_weather_data', None)
+        if weather_data is None:
+            # Fallback: re-load (will use synthetic if no grib paths)
+            weather_data = load_weather_data()
         wind_u = float(weather_data["wind_u"][lat_idx, lon_idx])
         wind_v = float(weather_data["wind_v"][lat_idx, lon_idx])
         wave_h = float(weather_data["wave_height"][lat_idx, lon_idx])
@@ -333,7 +663,10 @@ class OceanRouter:
         cur_dir = (math.degrees(math.atan2(cur_u, cur_v)) + 360) % 360
 
         # Ice data
-        ice_data = load_ice_data()
+        # Ice data — use the stored NOAA data
+        ice_data = getattr(self, '_ice_data', None)
+        if ice_data is None:
+            ice_data = load_ice_data()
         ice_conc = 0.0
         if ice_data is not None and lat_idx < ice_data.shape[0] and lon_idx < ice_data.shape[1]:
             ice_conc = float(ice_data[lat_idx, lon_idx])

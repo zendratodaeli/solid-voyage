@@ -229,20 +229,184 @@ def generate_synthetic_currents() -> tuple[np.ndarray, np.ndarray]:
     return current_u, current_v
 
 
+def _resample_to_grid(data: np.ndarray) -> np.ndarray:
+    """
+    Resample a GRIB/NetCDF array to match the engine's grid dimensions.
+
+    NOAA products come at various resolutions (0.25°, 0.5°, irregular).
+    We resample to our grid using scipy zoom so the graph builder
+    can index directly by [lat_idx, lon_idx].
+    """
+    expected_lat = len(np.arange(LAT_MIN, LAT_MAX, GRID_RESOLUTION))
+    expected_lon = len(np.arange(LON_MIN, LON_MAX, GRID_RESOLUTION))
+
+    if data.shape == (expected_lat, expected_lon):
+        return data  # Already correct size
+
+    try:
+        from scipy.ndimage import zoom
+        lat_ratio = expected_lat / data.shape[0]
+        lon_ratio = expected_lon / data.shape[1]
+        resampled = zoom(data, (lat_ratio, lon_ratio), order=1)  # bilinear
+        logger.info(f"Resampled {data.shape} → {resampled.shape}")
+        return resampled.astype(np.float32)
+    except Exception as e:
+        logger.warning(f"Resampling failed ({e}) — using synthetic fallback")
+        return None
+
+
+def parse_rtofs_netcdf(nc_path: str) -> tuple[np.ndarray, np.ndarray] | None:
+    """
+    Parse RTOFS NetCDF file to extract surface ocean current U and V.
+
+    RTOFS uses a tripolar grid (not regular lat/lon), so we must extract
+    the native 2D lat/lon coordinates and regrid onto our regular grid
+    using scipy.interpolate.griddata.
+
+    Returns:
+        (current_u, current_v) as numpy arrays on the engine's regular grid,
+        or None if parsing fails.
+    """
+    try:
+        import xarray as xr
+        from scipy.interpolate import griddata
+
+        ds = xr.open_dataset(nc_path)
+
+        # RTOFS variable names for surface currents
+        u_var = None
+        v_var = None
+        for name in ds.data_vars:
+            name_lower = name.lower()
+            if "u_velocity" in name_lower or "u_barotropic" in name_lower or name == "u":
+                u_var = name
+            elif "v_velocity" in name_lower or "v_barotropic" in name_lower or name == "v":
+                v_var = name
+
+        if u_var is None or v_var is None:
+            # Try common RTOFS diagnostic variable names
+            for u_try, v_try in [
+                ("u_velocity", "v_velocity"),
+                ("water_u", "water_v"),
+                ("ssu", "ssv"),
+            ]:
+                if u_try in ds.data_vars and v_try in ds.data_vars:
+                    u_var, v_var = u_try, v_try
+                    break
+
+        if u_var is None or v_var is None:
+            logger.warning(f"RTOFS variables not found. Available: {list(ds.data_vars)}")
+            ds.close()
+            return None
+
+        # Extract surface layer (first time step, first depth)
+        u_data = ds[u_var]
+        v_data = ds[v_var]
+
+        # Squeeze out single-valued dimensions (time, depth)
+        if u_data.ndim > 2:
+            u_data = u_data.isel({dim: 0 for dim in u_data.dims if dim not in ['lat', 'latitude', 'Latitude', 'Y', 'y', 'lon', 'longitude', 'Longitude', 'X', 'x']})
+        if v_data.ndim > 2:
+            v_data = v_data.isel({dim: 0 for dim in v_data.dims if dim not in ['lat', 'latitude', 'Latitude', 'Y', 'y', 'lon', 'longitude', 'Longitude', 'X', 'x']})
+
+        u_raw = u_data.values.astype(np.float32)
+        v_raw = v_data.values.astype(np.float32)
+
+        # ── Extract native RTOFS 2D coordinate arrays ──
+        # RTOFS tripolar grid has 2D lat/lon (not 1D axes)
+        lat_2d = None
+        lon_2d = None
+
+        # Try to find 2D coordinate arrays
+        for coord_name in ['Latitude', 'latitude', 'lat', 'TLAT', 'ULAT', 'nav_lat']:
+            if coord_name in ds.coords or coord_name in ds.data_vars:
+                arr = ds[coord_name].values
+                if arr.ndim == 2:
+                    lat_2d = arr
+                    break
+        for coord_name in ['Longitude', 'longitude', 'lon', 'TLON', 'ULON', 'nav_lon']:
+            if coord_name in ds.coords or coord_name in ds.data_vars:
+                arr = ds[coord_name].values
+                if arr.ndim == 2:
+                    lon_2d = arr
+                    break
+
+        ds.close()
+
+        if lat_2d is not None and lon_2d is not None:
+            logger.info(f"RTOFS tripolar grid detected: {lat_2d.shape}, regridding to regular grid...")
+
+            # Build target regular grid
+            target_lats = np.arange(LAT_MIN, LAT_MAX, GRID_RESOLUTION)
+            target_lons = np.arange(LON_MIN, LON_MAX, GRID_RESOLUTION)
+            target_lon_grid, target_lat_grid = np.meshgrid(target_lons, target_lats)
+
+            # Flatten source coordinates and data (skip NaN)
+            flat_lat = lat_2d.ravel()
+            flat_lon = lon_2d.ravel()
+            flat_u = np.nan_to_num(u_raw.ravel(), nan=0.0)
+            flat_v = np.nan_to_num(v_raw.ravel(), nan=0.0)
+
+            # Normalize longitudes to [-180, 180]
+            flat_lon = np.where(flat_lon > 180, flat_lon - 360, flat_lon)
+
+            # Filter valid points (skip fill values and extreme values)
+            valid = (np.abs(flat_lat) <= 90) & (np.abs(flat_lon) <= 180) & np.isfinite(flat_lat) & np.isfinite(flat_lon)
+            src_points = np.column_stack([flat_lat[valid], flat_lon[valid]])
+
+            # Subsample to keep memory manageable (every 4th point)
+            step = 4
+            src_sub = src_points[::step]
+            u_sub = flat_u[valid][::step]
+            v_sub = flat_v[valid][::step]
+
+            logger.info(f"Regridding {len(src_sub)} source points → {target_lat_grid.shape} target grid")
+
+            target_points = np.column_stack([target_lat_grid.ravel(), target_lon_grid.ravel()])
+
+            current_u = griddata(src_sub, u_sub, target_points, method='nearest', fill_value=0.0)
+            current_v = griddata(src_sub, v_sub, target_points, method='nearest', fill_value=0.0)
+
+            current_u = current_u.reshape(target_lat_grid.shape).astype(np.float32)
+            current_v = current_v.reshape(target_lat_grid.shape).astype(np.float32)
+
+            logger.info(f"RTOFS regridded to {current_u.shape} — max current: {np.sqrt(current_u**2 + current_v**2).max():.2f} m/s")
+            return current_u, current_v
+
+        else:
+            # Fallback: assume regular grid and use simple resampling
+            logger.info("RTOFS appears to be on a regular grid, using zoom resampling")
+            current_u = np.nan_to_num(u_raw, nan=0.0)
+            current_v = np.nan_to_num(v_raw, nan=0.0)
+            logger.info(f"Parsed RTOFS currents: shape {current_u.shape}")
+            return current_u, current_v
+
+    except ImportError:
+        logger.warning("xarray not available for RTOFS parsing")
+        return None
+    except Exception as e:
+        logger.warning(f"RTOFS NetCDF parsing failed: {e}")
+        return None
+
+
 def load_weather_data(grib_paths: dict = None) -> dict:
     """
-    Load weather data from GRIB files or generate synthetic data.
+    Load weather data from GRIB/NetCDF files or generate synthetic data.
+
+    Tries real NOAA data first for each source (wind, waves, currents).
+    Falls back to synthetic data for any source that fails.
 
     Args:
-        grib_paths: Dict with paths to GRIB files (from downloader)
+        grib_paths: Dict with paths to downloaded files (from downloader)
 
     Returns:
         dict with 'wind_u', 'wind_v', 'wave_height', 'current_u', 'current_v'
               as numpy arrays of shape [n_lat, n_lon]
     """
     result = {}
+    sources = {}
 
-    # Try real GRIB data first
+    # ── WIND (GFS) ──────────────────────────────────────────────────
     grib_wind_loaded = False
     if grib_paths and "gfs" in grib_paths:
         gfs = grib_paths["gfs"]
@@ -250,28 +414,64 @@ def load_weather_data(grib_paths: dict = None) -> dict:
             wind_u = parse_grib_file(gfs["wind_u_path"], "UGRD")
             wind_v = parse_grib_file(gfs["wind_v_path"], "VGRD")
             if wind_u is not None and wind_v is not None:
-                result["wind_u"] = wind_u
-                result["wind_v"] = wind_v
-                grib_wind_loaded = True
+                # Resample to engine grid if needed
+                wind_u = _resample_to_grid(wind_u)
+                wind_v = _resample_to_grid(wind_v)
+                if wind_u is not None and wind_v is not None:
+                    result["wind_u"] = wind_u
+                    result["wind_v"] = wind_v
+                    grib_wind_loaded = True
 
-    # Fallback to synthetic data
     if not grib_wind_loaded:
         logger.info("Using synthetic wind data (GRIB not available)")
         wind_u, wind_v = generate_synthetic_wind()
         result["wind_u"] = wind_u
         result["wind_v"] = wind_v
+    sources["Wind"] = "NOAA GFS" if grib_wind_loaded else "synthetic"
 
-    # Waves — synthetic for Phase 1 (WW3 GRIB parsing is Phase 1b)
-    result["wave_height"] = generate_synthetic_waves()
+    # ── WAVES (WW3) ─────────────────────────────────────────────────
+    grib_waves_loaded = False
+    if grib_paths and "ww3" in grib_paths:
+        ww3 = grib_paths["ww3"]
+        if "wave_height_path" in ww3:
+            wave_h = parse_grib_file(ww3["wave_height_path"], "HTSGW")
+            if wave_h is not None:
+                wave_h = _resample_to_grid(wave_h)
+                if wave_h is not None:
+                    # Replace NaN (land cells) with 0
+                    wave_h = np.nan_to_num(wave_h, nan=0.0)
+                    result["wave_height"] = wave_h
+                    grib_waves_loaded = True
 
-    # Currents — synthetic for Phase 1 (RTOFS parsing is Phase 1b)
-    current_u, current_v = generate_synthetic_currents()
-    result["current_u"] = current_u
-    result["current_v"] = current_v
+    if not grib_waves_loaded:
+        logger.info("Using synthetic wave data (WW3 GRIB not available)")
+        result["wave_height"] = generate_synthetic_waves()
+    sources["Waves"] = "NOAA WW3" if grib_waves_loaded else "synthetic"
 
-    logger.info(
-        f"Weather data loaded — Wind: {'GRIB' if grib_wind_loaded else 'synthetic'}, "
-        f"Waves: synthetic, Currents: synthetic"
-    )
+    # ── CURRENTS (RTOFS) ────────────────────────────────────────────
+    rtofs_loaded = False
+    if grib_paths and "rtofs" in grib_paths:
+        rtofs = grib_paths["rtofs"]
+        if "rtofs_nc_path" in rtofs:
+            parsed = parse_rtofs_netcdf(rtofs["rtofs_nc_path"])
+            if parsed is not None:
+                current_u, current_v = parsed
+                current_u = _resample_to_grid(current_u)
+                current_v = _resample_to_grid(current_v)
+                if current_u is not None and current_v is not None:
+                    result["current_u"] = current_u
+                    result["current_v"] = current_v
+                    rtofs_loaded = True
+
+    if not rtofs_loaded:
+        logger.info("Using synthetic current data (RTOFS not available)")
+        current_u, current_v = generate_synthetic_currents()
+        result["current_u"] = current_u
+        result["current_v"] = current_v
+    sources["Currents"] = "NOAA RTOFS" if rtofs_loaded else "synthetic"
+
+    # ── Log summary ─────────────────────────────────────────────────
+    source_str = ", ".join(f"{k}: {v}" for k, v in sources.items())
+    logger.info(f"Weather data loaded — {source_str}")
 
     return result

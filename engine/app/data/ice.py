@@ -186,9 +186,10 @@ def download_usnic_shapefiles() -> str | None:
     Returns path to the downloaded shapefile, or None if download fails.
     """
     import requests
+    from app.config import USNIC_ICE_URL
 
-    # USNIC provides weekly Arctic analysis shapefiles
-    USNIC_URL = "https://usicecenter.gov/File/DownloadCurrent"
+    # USNIC provides weekly Arctic MIZ (Marginal Ice Zone) shapefiles
+    USNIC_URL = USNIC_ICE_URL
 
     os.makedirs(ICE_DIR, exist_ok=True)
     shapefile_path = os.path.join(ICE_DIR, "arctic_ice.zip")
@@ -214,15 +215,16 @@ def rasterize_ice_shapefile(shapefile_path: str) -> np.ndarray | None:
     """
     Rasterize an ice shapefile onto the ocean grid.
 
-    Reads polygons from the shapefile and fills the grid cells they
-    intersect with the appropriate ice concentration value.
+    Reads polygons from the shapefile using geopandas, extracts ice
+    concentration from USNIC attribute fields, and fills grid cells
+    that intersect each polygon with the appropriate concentration.
 
-    Requires: fiona, shapely (already in requirements)
+    Supports: .shp, .geojson, .json, .zip (auto-extracted)
+    Requires: geopandas, shapely (both in requirements)
     """
     try:
         import zipfile
-        import json
-        from shapely.geometry import shape, box
+        from shapely.geometry import box
 
         os.makedirs(ICE_DIR, exist_ok=True)
         extract_dir = os.path.join(ICE_DIR, "extracted")
@@ -231,7 +233,7 @@ def rasterize_ice_shapefile(shapefile_path: str) -> np.ndarray | None:
         with zipfile.ZipFile(shapefile_path, "r") as zf:
             zf.extractall(extract_dir)
 
-        # Find .geojson or .shp file
+        # Find .shp or .geojson file
         shp_files = []
         for root, dirs, files in os.walk(extract_dir):
             for f in files:
@@ -242,7 +244,18 @@ def rasterize_ice_shapefile(shapefile_path: str) -> np.ndarray | None:
             logger.warning("No shapefile found in USNIC archive")
             return None
 
-        logger.info(f"Rasterizing ice from: {shp_files[0]}")
+        shp_path = shp_files[0]
+        logger.info(f"Rasterizing ice from: {shp_path}")
+
+        # Read with geopandas (handles .shp, .geojson, etc.)
+        import geopandas as gpd
+        gdf = gpd.read_file(shp_path)
+
+        if gdf.empty:
+            logger.warning("USNIC shapefile is empty — no ice polygons")
+            return None
+
+        logger.info(f"USNIC shapefile: {len(gdf)} polygons, columns: {list(gdf.columns)}")
 
         # Initialize grid
         lats = np.arange(LAT_MIN, LAT_MAX, GRID_RESOLUTION)
@@ -250,47 +263,121 @@ def rasterize_ice_shapefile(shapefile_path: str) -> np.ndarray | None:
         n_lat, n_lon = len(lats), len(lons)
         ice = np.zeros((n_lat, n_lon), dtype=np.float32)
 
-        # Parse shapefile (using shapely for geometry, manual for attributes)
-        # For a production system, use fiona or geopandas
-        # For now, we try basic geojson parsing
-        if shp_files[0].endswith((".geojson", ".json")):
-            with open(shp_files[0], "r") as f:
-                geojson = json.load(f)
+        # Process each polygon
+        for idx, row in gdf.iterrows():
+            geom = row.geometry
+            if geom is None or geom.is_empty:
+                continue
 
-            for feature in geojson.get("features", []):
-                geom = shape(feature["geometry"])
-                props = feature.get("properties", {})
+            # Extract ice concentration from USNIC fields
+            # USNIC MIZ shapefiles use various column names:
+            #   CT = total concentration (0-100 or "91-100" range strings)
+            #   CONC, SIC, ICE_CONC = alternative column names
+            #   MIZ = Marginal Ice Zone identifier
+            concentration = _extract_concentration(row, gdf.columns)
 
-                # USNIC uses CT (total concentration) field
-                concentration = 0.5  # Default moderate
-                for key in ["CT", "CONC", "SIC", "ICE_CONC"]:
-                    if key in props:
-                        val = props[key]
-                        if isinstance(val, (int, float)):
-                            concentration = val / 100.0 if val > 1 else val
-                        break
+            # Skip open water polygons
+            if concentration < 0.05:
+                continue
 
-                # Rasterize: find grid cells within this polygon
-                bounds = geom.bounds  # (minx, miny, maxx, maxy) = (lon, lat, lon, lat)
-                for i, lat in enumerate(lats):
-                    if lat < bounds[1] - 1 or lat > bounds[3] + 1:
+            # Rasterize: find grid cells within this polygon's bounding box
+            bounds = geom.bounds  # (minx, miny, maxx, maxy) = (lon, lat, lon, lat)
+            for i, lat in enumerate(lats):
+                if lat < bounds[1] - 1 or lat > bounds[3] + 1:
+                    continue
+                for j, lon in enumerate(lons):
+                    if lon < bounds[0] - 1 or lon > bounds[2] + 1:
                         continue
-                    for j, lon in enumerate(lons):
-                        if lon < bounds[0] - 1 or lon > bounds[2] + 1:
-                            continue
-                        cell = box(
-                            lon - GRID_RESOLUTION / 2, lat - GRID_RESOLUTION / 2,
-                            lon + GRID_RESOLUTION / 2, lat + GRID_RESOLUTION / 2,
-                        )
-                        if geom.intersects(cell):
-                            ice[i, j] = max(ice[i, j], concentration)
+                    cell = box(
+                        lon - GRID_RESOLUTION / 2, lat - GRID_RESOLUTION / 2,
+                        lon + GRID_RESOLUTION / 2, lat + GRID_RESOLUTION / 2,
+                    )
+                    if geom.intersects(cell):
+                        ice[i, j] = max(ice[i, j], concentration)
 
-        logger.info(f"Rasterized ice data: {(ice > 0.1).sum():,} icy cells")
+        icy_cells = int((ice > 0.1).sum())
+        blocked_cells = int((ice > ICE_BLOCK_THRESHOLD).sum())
+        logger.info(
+            f"Rasterized USNIC ice data: {icy_cells:,} icy cells, "
+            f"{blocked_cells:,} blocked cells (>{ICE_BLOCK_THRESHOLD*100:.0f}%)"
+        )
         return ice
 
+    except ImportError:
+        logger.warning("geopandas not available — cannot rasterize .shp files")
+        return None
     except Exception as e:
         logger.warning(f"Ice shapefile rasterization failed: {e}")
         return None
+
+
+def _extract_concentration(row, columns) -> float:
+    """
+    Extract ice concentration from a USNIC shapefile row.
+
+    USNIC uses various formats:
+    - Numeric: CT=90 → 0.9 (divided by 100)
+    - Range string: CT="81-100" → 0.9 (midpoint / 100)
+    - MIZ category: "1-8 tenths" → 0.45, "8-10 tenths" → 0.9
+    """
+    # Try known column names
+    for col in ["CT", "CONC", "SIC", "ICE_CONC", "TOTAL_CONC", "ICECODE"]:
+        if col in columns and row[col] is not None:
+            val = row[col]
+
+            # USNIC ICECODE is a WMO egg-code string
+            # First two digits encode total concentration:
+            #   "81" = 80-100% (pack ice)
+            #   "46" = 40-60% (moderate)
+            #   "13" = 10-30% (light)
+            #   "00" or "01" = open water / bergy water
+            if col == "ICECODE" and isinstance(val, str) and len(val) >= 2:
+                try:
+                    first_digit = int(val[0])
+                    second_digit = int(val[1])
+                    # First digit = lower bound tenths, second digit = upper bound tenths
+                    concentration = (first_digit + second_digit) / 2.0 / 10.0
+                    return max(0.05, concentration)
+                except (ValueError, IndexError):
+                    return 0.5  # Can't parse, assume moderate
+
+            # Numeric value
+            if isinstance(val, (int, float)):
+                return val / 100.0 if val > 1 else val
+
+            # Range string like "81-100" or "1-8"
+            if isinstance(val, str) and "-" in val:
+                try:
+                    parts = val.split("-")
+                    low = float(parts[0].strip())
+                    high = float(parts[1].strip())
+                    midpoint = (low + high) / 2
+                    return midpoint / 100.0 if midpoint > 1 else midpoint
+                except (ValueError, IndexError):
+                    pass
+
+            # Percentage string like "90%"
+            if isinstance(val, str):
+                try:
+                    return float(val.replace("%", "").strip()) / 100.0
+                except ValueError:
+                    pass
+
+    # If no concentration column found, check for MIZ-type classification
+    for col in ["MIZ", "ICE_TYPE", "POLY_TYPE"]:
+        if col in columns and row[col] is not None:
+            val = str(row[col]).lower()
+            if "8" in val and "10" in val:
+                return 0.9   # Pack ice (80-100%)
+            elif "1" in val and "8" in val:
+                return 0.45  # MIZ (10-80%)
+            elif "fast" in val:
+                return 0.95  # Fast ice
+            elif "ice" in val:
+                return 0.5   # Generic ice
+
+    # Default: moderate ice (better safe than open water)
+    return 0.5
 
 
 def load_ice_data(month: int = None, try_download: bool = False) -> np.ndarray:

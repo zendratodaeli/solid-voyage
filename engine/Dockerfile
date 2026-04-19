@@ -1,10 +1,15 @@
-# Solid Vision — Weather Routing Engine
-# Lightweight Python image optimized for FastAPI + NetworkX
+# Solid Vision — Weather Routing Engine (Production)
+# With eccodes C library for real NOAA GRIB/NetCDF parsing
 
 FROM python:3.12-slim
 
-# System dependencies for numpy/scipy (pre-compiled wheels on slim)
+# Install eccodes C library + HDF5/NetCDF support
+# libeccodes-dev  — ECMWF GRIB parser (required by cfgrib)
+# libhdf5-dev     — HDF5 support (required by netcdf4 for RTOFS)
+# libgeos-dev     — Geometry engine (required by shapely/geopandas for ice shapefiles)
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    libeccodes-dev \
+    libgeos-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -16,8 +21,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY app/ app/
 
-# Create data directory
-RUN mkdir -p data
+# Create data directories for all NOAA sources
+RUN mkdir -p data/gfs data/ww3 data/rtofs data/ice data/icebergs
 
 # Environment
 ENV PYTHONUNBUFFERED=1

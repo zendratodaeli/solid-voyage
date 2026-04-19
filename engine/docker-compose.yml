@@ -15,13 +15,14 @@ services:
       - REBUILD_INTERVAL_HOURS=6
       - GRID_RESOLUTION=0.5
     volumes:
-      # Persist land mask + ice cache between restarts
+      # Persist NOAA data + land mask + ice cache between restarts
+      # This avoids re-downloading ~200 MB of GRIB/NetCDF on every restart
       - engine-data:/app/data
     restart: unless-stopped
     deploy:
       resources:
         limits:
-          memory: 2G  # Graph needs ~800MB RAM
+          memory: 2G  # Graph needs ~800MB RAM + ~200MB for GRIB parsing
         reservations:
           memory: 1G
 
