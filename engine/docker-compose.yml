@@ -22,9 +22,9 @@ services:
     deploy:
       resources:
         limits:
-          memory: 2G  # Graph needs ~800MB RAM + ~200MB for GRIB parsing
+          memory: 4G  # Graph ~800MB + NOAA arrays ~1.5GB + ECMWF arrays ~1GB
         reservations:
-          memory: 1G
+          memory: 2G
 
 volumes:
   engine-data:
