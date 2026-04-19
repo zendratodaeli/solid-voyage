@@ -57,7 +57,7 @@ interface AnalysisRequest {
   vesselDwt?: number;
   cargoType?: string;
   cargoQuantityMt?: number;
-  /** Live weather forecast data from Open-Meteo marine API */
+  /** Live weather forecast data from NOAA engine */
   weatherForecast?: {
     worstConditions: {
       maxWaveHeight: number;
@@ -193,7 +193,7 @@ function buildComparisonPrompt(req: AnalysisRequest): string {
   // Add weather forecast data if available
   if (req.weatherForecast) {
     const wf = req.weatherForecast;
-    lines.push("\n## Live Weather Forecast (from Open-Meteo Marine API)\n");
+    lines.push("\n## Live Weather Forecast (NOAA GFS/WW3)\n");
     lines.push(`- Overall Severity: ${wf.averageConditions.overallSeverity}`);
     lines.push(`- Average Wave Height: ${wf.averageConditions.avgWaveHeight.toFixed(1)}m`);
     lines.push(`- Average Swell Height: ${wf.averageConditions.avgSwellHeight.toFixed(1)}m`);

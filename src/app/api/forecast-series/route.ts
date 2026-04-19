@@ -10,7 +10,7 @@ export async function GET(request: NextRequest) {
   }
 
   // Use the engine proxy host or default to localhost
-  const engineHost = process.env.WEATHER_ENGINE_HOST || "http://127.0.0.1:8001";
+  const engineHost = process.env.WEATHER_ENGINE_URL || "http://127.0.0.1:8001";
   
   try {
     const url = `${engineHost}/forecast-series?lat=${lat}&lon=${lon}`;

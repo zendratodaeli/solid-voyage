@@ -3,10 +3,12 @@
 /**
  * useWeather Hook
  *
- * Fetches marine weather data for an array of coordinates
- * from the /api/weather endpoint (Open-Meteo Marine proxy).
- * 
- * Follows the same state-management pattern as useNavApiRoute.
+ * Manages marine weather state for the route planner.
+ * Primary source: NOAA engine via /api/weather-routing/route-forecast
+ * Fallback: Open-Meteo via /api/weather (when NOAA engine is offline)
+ *
+ * The setWeatherData setter lets callers inject pre-computed NOAA
+ * summaries directly without triggering an Open-Meteo fetch.
  */
 
 import { useState, useCallback } from "react";
@@ -17,6 +19,7 @@ interface UseWeatherReturn {
     coordinates: Array<{ lat: number; lon: number }>,
     options?: { startDate?: string; endDate?: string; forecastDays?: number }
   ) => Promise<RouteWeatherSummary | null>;
+  setWeatherData: (data: RouteWeatherSummary | null) => void;
   isLoading: boolean;
   data: RouteWeatherSummary | null;
   error: string | null;
@@ -28,6 +31,13 @@ export function useWeather(): UseWeatherReturn {
   const [data, setData] = useState<RouteWeatherSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  /** Inject a pre-computed weather summary (e.g. from NOAA engine) */
+  const setWeatherData = useCallback((summary: RouteWeatherSummary | null) => {
+    setData(summary);
+    setError(null);
+  }, []);
+
+  /** Fallback fetch from Open-Meteo — only called when NOAA engine is offline */
   const fetchWeather = useCallback(
     async (
       coordinates: Array<{ lat: number; lon: number }>,
@@ -42,7 +52,6 @@ export function useWeather(): UseWeatherReturn {
       setError(null);
 
       try {
-        // Build query params
         const lats = coordinates.map((c) => c.lat.toFixed(4)).join(",");
         const lons = coordinates.map((c) => c.lon.toFixed(4)).join(",");
 
@@ -58,15 +67,14 @@ export function useWeather(): UseWeatherReturn {
         }
 
         const response = await fetch(`/api/weather?${params.toString()}`);
-        
-        // Defense: check for HTML responses (auth redirect, error pages)
+
         const contentType = response.headers.get("content-type") || "";
         if (!contentType.includes("application/json")) {
           setError("Weather service temporarily unavailable. Please try again.");
           setData(null);
           return null;
         }
-        
+
         if (!response.ok) {
           setError(`Weather API error (${response.status})`);
           setData(null);
@@ -102,6 +110,7 @@ export function useWeather(): UseWeatherReturn {
 
   return {
     fetchWeather,
+    setWeatherData,
     isLoading,
     data,
     error,

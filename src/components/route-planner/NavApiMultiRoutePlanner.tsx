@@ -391,8 +391,8 @@ export function NavApiMultiRoutePlanner({
     });
   }, []);
 
-  // Weather integration
-  const { fetchWeather, isLoading: isWeatherLoading, data: weatherData, error: weatherError, clearWeather } = useWeather();
+  // Weather integration — NOAA primary, Open-Meteo fallback
+  const { fetchWeather, setWeatherData, isLoading: isWeatherLoading, data: weatherData, error: weatherError, clearWeather } = useWeather();
 
   // ── Click-to-Fill State ──────────────────────────────────────────
   // Tracks which waypoint field is "armed" & waiting for a map click
@@ -2001,12 +2001,8 @@ export function NavApiMultiRoutePlanner({
             fetchedAt: new Date().toISOString(),
           };
 
-          // Use fetchWeather's internal data setter via direct hook method
-          // Since useWeather doesn't expose a setter, we call fetchWeather with
-          // a dummy coord to trigger the hook, then the weatherData will be from Open-Meteo
-          // BUT we already have NOAA data mapped — so we do a parallel Open-Meteo call as fallback
-          fetchWeather(weatherCoords, { forecastDays: Math.min(16, Math.ceil((routeResult.summary.estimatedDays || 7) + 1)) })
-            .catch(() => {});
+          // ✅ Inject NOAA summary directly — no Open-Meteo call needed
+          setWeatherData(summary);
 
           console.log(
             `[NOAA RouteWeather] ✅ ${rf.waypoints.length} waypoints, ` +

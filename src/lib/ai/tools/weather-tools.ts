@@ -1,8 +1,9 @@
 /**
  * Weather Tools for AI Copilot
  *
- * Provides weather data for maritime locations using the Open-Meteo API
- * (free, no API key required). Compatible with AI SDK v6.
+ * Provides weather data for maritime locations using the NOAA engine
+ * (GFS wind/pressure, WaveWatch III waves, RTOFS ocean currents).
+ * Compatible with AI SDK v6.
  */
 
 import { tool } from "ai";
@@ -94,7 +95,7 @@ async function findPortCoords(portName: string): Promise<{ lat: number; lon: num
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// OPEN-METEO API HELPERS
+// NOAA ENGINE HELPERS
 // ═══════════════════════════════════════════════════════════════════
 
 interface WeatherData {
@@ -158,24 +159,20 @@ async function fetchMarineWeather(lat: number, lon: number): Promise<{
   forecast: ForecastDay[];
   seaCondition: string;
   beaufort: { force: number; description: string };
+  navigability?: string;
+  oceanCurrent?: { velocity: number; direction: number };
 }> {
-  // Fetch current weather + marine data from Open-Meteo (free, no API key)
-  const currentUrl = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m,wind_direction_10m,wind_gusts_10m,surface_pressure&daily=temperature_2m_max,temperature_2m_min,weather_code,wind_speed_10m_max,wind_gusts_10m_max,precipitation_sum&forecast_days=5&timezone=UTC`;
-  
-  // Marine forecast (wave data)
-  const marineUrl = `https://marine-api.open-meteo.com/v1/marine?latitude=${lat}&longitude=${lon}&current=wave_height&daily=wave_height_max&forecast_days=5&timezone=UTC`;
+  // Fetch from NOAA engine /conditions endpoint (server-side proxy)
+  const engineUrl = `${process.env.WEATHER_ENGINE_URL || "http://195.201.27.96:8001"}/conditions?lat=${lat}&lon=${lon}`;
 
-  const [weatherRes, marineRes] = await Promise.allSettled([
-    fetch(currentUrl).then((r) => r.json()),
-    fetch(marineUrl).then((r) => r.json()),
-  ]);
+  const engineRes = await fetch(engineUrl, { next: { revalidate: 3600 } }).catch(() => null);
+  const engine = engineRes?.ok ? await engineRes.json().catch(() => null) : null;
 
-  const weather = weatherRes.status === "fulfilled" ? weatherRes.value : null;
-  const marine = marineRes.status === "fulfilled" ? marineRes.value : null;
-
-  const windSpeed = weather?.current?.wind_speed_10m ?? 0;
-  const waveHeight = marine?.current?.wave_height ?? 0;
-  const bf = beaufortScale(windSpeed);
+  // Map NOAA engine response to internal WeatherData
+  const windSpeedKnots = engine?.wind_speed_knots ?? 0;
+  const windSpeedKmh = windSpeedKnots * 1.852;
+  const waveHeight = engine?.wave_height_m ?? 0;
+  const bf = beaufortScale(windSpeedKmh);
 
   // Sea state assessment
   let seaCondition = "Calm";
@@ -185,29 +182,31 @@ async function fetchMarineWeather(lat: number, lon: number): Promise<{
   else if (waveHeight > 1) seaCondition = "Slight — normal conditions";
 
   const current: WeatherData = {
-    temperature: weather?.current?.temperature_2m ?? 0,
-    windSpeed,
-    windDirection: weather?.current?.wind_direction_10m ?? 0,
-    windGusts: weather?.current?.wind_gusts_10m ?? 0,
+    temperature: engine?.sea_surface_temp_c ?? 0,
+    windSpeed: windSpeedKmh,
+    windDirection: engine?.wind_direction_deg ?? 0,
+    windGusts: windSpeedKmh * 1.3, // estimate gusts at 30% above mean
     waveHeight,
-    weatherCode: weather?.current?.weather_code ?? 0,
-    humidity: weather?.current?.relative_humidity_2m ?? 0,
-    visibility: 10, // Open-Meteo doesn't provide visibility in free tier
-    pressure: weather?.current?.surface_pressure ?? 1013,
+    weatherCode: 0, // NOAA engine doesn't use WMO weather codes
+    humidity: 0,
+    visibility: engine?.visibility_km ?? 10,
+    pressure: engine?.pressure_hpa ?? 1013,
   };
 
-  const forecast: ForecastDay[] = (weather?.daily?.time || []).map((date: string, i: number) => ({
-    date,
-    tempMax: weather.daily.temperature_2m_max?.[i] ?? 0,
-    tempMin: weather.daily.temperature_2m_min?.[i] ?? 0,
-    windSpeedMax: weather.daily.wind_speed_10m_max?.[i] ?? 0,
-    windGustsMax: weather.daily.wind_gusts_10m_max?.[i] ?? 0,
-    waveHeightMax: marine?.daily?.wave_height_max?.[i] ?? 0,
-    weatherCode: weather.daily.weather_code?.[i] ?? 0,
-    precipitationSum: weather.daily.precipitation_sum?.[i] ?? 0,
-  }));
+  // NOAA doesn't provide multi-day forecast from /conditions — return empty forecast
+  // The /forecast-series endpoint provides timeseries data for the dashboard
+  const forecast: ForecastDay[] = [];
 
-  return { current, forecast, seaCondition, beaufort: bf };
+  return {
+    current,
+    forecast,
+    seaCondition,
+    beaufort: bf,
+    navigability: engine?.navigability,
+    oceanCurrent: engine?.ocean_current_velocity != null
+      ? { velocity: engine.ocean_current_velocity, direction: engine.ocean_current_direction ?? 0 }
+      : undefined,
+  };
 }
 
 // ═══════════════════════════════════════════════════════════════════
