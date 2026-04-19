@@ -2,12 +2,16 @@
 API route handlers for the Maritime Weather Routing Engine.
 """
 import logging
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from app.models.schemas import (
     RouteRequest,
     RouteResponse,
     HealthResponse,
     GraphInfoResponse,
+    ConditionsResponse,
+    RouteForecastRequest,
+    RouteForecastResponse,
+    WaypointForecast,
     Waypoint,
 )
 from app.graph.pathfinder import OceanRouter
@@ -76,6 +80,41 @@ async def calculate_weather_route(request: RouteRequest):
     )
 
 
+@router.get("/conditions", response_model=ConditionsResponse)
+async def get_conditions(
+    lat: float = Query(..., description="Latitude", ge=-90, le=90),
+    lon: float = Query(..., description="Longitude", ge=-180, le=180),
+    vessel_speed: float = Query(default=12.5, description="Vessel speed in knots", gt=0, le=30),
+):
+    """
+    Get maritime conditions at a specific ocean coordinate.
+
+    Returns wind, waves, ocean currents, ice concentration, speed impact,
+    and navigability classification — data that supplements Open-Meteo's
+    atmospheric forecasts with ocean-physics intelligence.
+    """
+    conditions = ocean_router.get_conditions(lat, lon, vessel_speed)
+
+    return ConditionsResponse(
+        lat=round(lat, 4),
+        lon=round(lon, 4),
+        is_ocean=conditions.get("is_ocean", False),
+        wind_speed_knots=conditions.get("wind_speed_knots", 0),
+        wind_direction_deg=conditions.get("wind_direction_deg", 0),
+        wave_height_m=conditions.get("wave_height_m", 0),
+        current_speed_knots=conditions.get("current_speed_knots", 0),
+        current_direction_deg=conditions.get("current_direction_deg", 0),
+        ice_concentration_pct=conditions.get("ice_concentration_pct", 0),
+        ice_severity=conditions.get("ice_severity", "none"),
+        effective_speed_knots=conditions.get("effective_speed_knots", 0),
+        speed_reduction_pct=conditions.get("speed_reduction_pct", 0),
+        navigability=conditions.get("navigability", "open"),
+        advisory=conditions.get("advisory", ""),
+        data_source=_get_data_source_label(),
+        graph_timestamp=ocean_router.build_timestamp,
+    )
+
+
 @router.get("/health", response_model=HealthResponse)
 async def health_check():
     """
@@ -87,12 +126,214 @@ async def health_check():
         graph_nodes=ocean_router.graph.number_of_nodes() if ocean_router.graph else 0,
         graph_edges=ocean_router.graph.number_of_edges() if ocean_router.graph else 0,
         graph_timestamp=ocean_router.build_timestamp,
-        data_sources={
-            "wind": "synthetic_climatological",
-            "waves": "synthetic_climatological",
-            "currents": "synthetic_climatological",
-            "ice": "synthetic_seasonal",
-        },
+        data_sources=_get_data_sources_dict(),
+    )
+
+
+@router.get("/forecast-series")
+async def get_forecast_series(
+    lat: float = Query(..., description="Latitude", ge=-90, le=90),
+    lon: float = Query(..., description="Longitude", ge=-180, le=180),
+):
+    """
+    Get 7-day hourly forecast time series for a specific coordinate.
+
+    Returns NOAA GFS + WW3 multi-step forecast data including:
+    - Wave height, period, direction, swell, wind waves (WW3 0.25°)
+    - Wind speed/direction (GFS 0.25°)
+    - Barometric pressure (GFS)
+    - Visibility (GFS)
+    - Beaufort scale (derived)
+    - Sea surface temperature (OISST satellite + RTOFS forecast)
+    - Weather windows (operationally safe periods)
+    - Daily aggregates (max wave, max wind, min pressure)
+
+    This endpoint replaces the Open-Meteo marine API dependency.
+    Every data point traces directly to NOAA.
+    """
+    store = ocean_router.forecast_store
+
+    if store is None or not store.is_ready:
+        raise HTTPException(
+            status_code=503,
+            detail="Forecast store not ready. Data is being downloaded — please retry in 60 seconds."
+        )
+
+    result = store.get_timeseries(lat, lon)
+    return result
+
+
+@router.post("/route-forecast")
+async def get_route_forecast(request: RouteForecastRequest):
+    """
+    Time-aware weather forecast along a planned route.
+
+    For each NavAPI waypoint:
+    1. Calculates the vessel's ETA at that point (accounting for speed penalties at prior waypoints)
+    2. Extracts the NOAA forecast at the EXACT future timestamp when the vessel will be there
+    3. Applies vessel-class-specific speed curves (Capesize vs Handysize)
+    4. Returns per-waypoint advisory and total weather delay estimate
+
+    This is what commercial weather routing services charge $50k/year for.
+    """
+    from datetime import datetime, timezone, timedelta
+    from app.models.schemas import (
+        RouteForecastRequest as RFR,
+        RouteForecastResponse,
+        WaypointForecast,
+    )
+    from app.models.speed_curves import get_speed_curve
+    from app.graph.cost import haversine_nm
+
+    store = ocean_router.forecast_store
+    if store is None or not store.is_ready:
+        raise HTTPException(
+            status_code=503,
+            detail="Forecast store not ready. Data is being downloaded — please retry in 60 seconds."
+        )
+
+    # Parse ETD
+    try:
+        etd = datetime.fromisoformat(request.etd.replace("Z", "+00:00"))
+        if etd.tzinfo is None:
+            etd = etd.replace(tzinfo=timezone.utc)
+    except Exception:
+        raise HTTPException(status_code=400, detail=f"Invalid ETD format: {request.etd}")
+
+    # Build vessel speed curve
+    speed_curve = get_speed_curve(
+        vessel_type=request.vessel_type,
+        dwt=request.vessel_dwt,
+        loa=request.vessel_loa,
+        beam=request.vessel_beam,
+    )
+    base_speed = request.vessel_speed_knots
+
+    # Walk the waypoints, computing ETA at each
+    waypoint_forecasts: list[WaypointForecast] = []
+    cumulative_hours = 0.0
+    cumulative_distance_nm = 0.0
+    cumulative_hours_calm = 0.0  # Without weather penalty
+    worst_wp = None
+    worst_wave = 0.0
+
+    wps = request.waypoints
+
+    for i, wp in enumerate(wps):
+        if i > 0:
+            # Distance from previous waypoint
+            prev = wps[i - 1]
+            leg_distance_nm = haversine_nm(prev.lat, prev.lon, wp.lat, wp.lon)
+
+            # Calm-weather time for this leg
+            calm_hours = leg_distance_nm / base_speed if base_speed > 0 else 0
+            cumulative_hours_calm += calm_hours
+
+            # Get weather at the PREVIOUS waypoint's ETA to compute speed for THIS leg
+            # (the vessel experiences the weather during transit, not at arrival)
+            if waypoint_forecasts:
+                prev_weather = waypoint_forecasts[-1]
+                prev_wave = prev_weather.wave_height_m
+                prev_wind = prev_weather.wind_speed_knots
+                prev_wave_dir = prev_weather.wave_direction_deg
+
+                # Approximate vessel heading from prev → current
+                import math
+                dlat = wp.lat - prev.lat
+                dlon = wp.lon - prev.lon
+                heading = (math.degrees(math.atan2(dlon, dlat)) + 360) % 360
+
+                effective_spd = speed_curve.effective_speed(
+                    base_speed, prev_wave, prev_wave_dir, heading, prev_wind
+                )
+            else:
+                effective_spd = base_speed
+
+            # Time for this leg at effective speed
+            leg_hours = leg_distance_nm / effective_spd if effective_spd > 0 else 0
+            cumulative_hours += leg_hours
+            cumulative_distance_nm += leg_distance_nm
+
+        # ETA at this waypoint
+        eta = etd + timedelta(hours=cumulative_hours)
+
+        # Extract forecast AT this waypoint AT this ETA
+        wx = store.get_at_time(wp.lat, wp.lon, eta)
+
+        if "error" in wx:
+            continue
+
+        # Compute vessel-specific speed penalty at this waypoint
+        loss_pct = speed_curve.speed_loss_pct(
+            wave_height=wx.get("wave_height_m", 0),
+            wave_direction=wx.get("wave_direction_deg", 0),
+            wind_speed_knots=wx.get("wind_speed_knots", 0),
+        )
+        eff_speed = speed_curve.effective_speed(
+            base_speed,
+            wave_height=wx.get("wave_height_m", 0),
+            wave_direction=wx.get("wave_direction_deg", 0),
+            wind_speed_knots=wx.get("wind_speed_knots", 0),
+        )
+
+        # Navigability classification
+        wave_h = wx.get("wave_height_m", 0)
+        wind_kn = wx.get("wind_speed_knots", 0)
+        if wave_h >= 6.0:
+            navigability = "dangerous"
+            advisory = f"⚠️ Dangerous seas ({wave_h:.1f}m) — consider route deviation"
+        elif wave_h >= 4.0 or wind_kn >= 34:
+            navigability = "restricted"
+            advisory = f"Heavy weather ({wave_h:.1f}m waves, BF{wx.get('beaufort', 0)}) — speed reduction expected"
+        elif wave_h >= 2.5 or wind_kn >= 22:
+            navigability = "moderate"
+            advisory = f"Moderate seas ({wave_h:.1f}m, {wind_kn:.0f}kn) — minor delay"
+        else:
+            navigability = "open"
+            advisory = "Clear conditions"
+
+        wpf = WaypointForecast(
+            lat=wp.lat,
+            lon=wp.lon,
+            eta=eta.isoformat(),
+            hours_from_departure=round(cumulative_hours, 1),
+            distance_from_departure_nm=round(cumulative_distance_nm, 1),
+            wave_height_m=wx.get("wave_height_m", 0),
+            wave_period_s=wx.get("wave_period_s", 0),
+            wave_direction_deg=wx.get("wave_direction_deg", 0),
+            swell_height_m=wx.get("swell_height_m", 0),
+            wind_speed_knots=wx.get("wind_speed_knots", 0),
+            wind_direction_deg=wx.get("wind_direction_deg", 0),
+            pressure_hpa=wx.get("pressure_hpa", 0),
+            visibility_nm=wx.get("visibility_nm", 0),
+            beaufort=wx.get("beaufort", 0),
+            sea_surface_temperature=wx.get("sea_surface_temperature"),
+            speed_loss_pct=loss_pct,
+            effective_speed_knots=eff_speed,
+            navigability=navigability,
+            advisory=advisory,
+        )
+
+        waypoint_forecasts.append(wpf)
+
+        # Track worst segment
+        if wave_h > worst_wave:
+            worst_wave = wave_h
+            worst_wp = wpf
+
+    weather_delay = cumulative_hours - cumulative_hours_calm
+
+    return RouteForecastResponse(
+        success=True,
+        waypoints=waypoint_forecasts,
+        total_distance_nm=round(cumulative_distance_nm, 1),
+        total_hours_calm=round(cumulative_hours_calm, 1),
+        total_hours_weather=round(cumulative_hours, 1),
+        weather_delay_hours=round(max(0, weather_delay), 1),
+        worst_segment=worst_wp,
+        vessel_speed_curve=speed_curve.to_dict(),
+        source="NOAA_GFS_WW3_0p25",
+        cycle=store.cycle_timestamp.isoformat() if store.cycle_timestamp else None,
     )
 
 
@@ -140,3 +381,163 @@ async def scheduler_status():
     rebuild count, and whether a build is in progress.
     """
     return graph_scheduler.status
+
+
+@router.get("/ice-grid")
+async def get_ice_grid(
+    min_lat: float = Query(-78, ge=-90, le=90),
+    max_lat: float = Query(78, ge=-90, le=90),
+    min_lon: float = Query(-180, ge=-180, le=180),
+    max_lon: float = Query(180, ge=-180, le=180),
+    threshold: float = Query(0.05, ge=0, le=1, description="Min ice concentration to include"),
+):
+    """
+    Return ice concentration grid cells for map overlay rendering.
+
+    Returns an array of {lat, lon, concentration} objects for cells
+    with ice above the threshold. Sampled at engine grid resolution (0.5°).
+    """
+    import numpy as np
+
+    ice_data = getattr(ocean_router, '_ice_data', None)
+    if ice_data is None:
+        return {"cells": [], "source": "none", "count": 0}
+
+    lats = np.arange(LAT_MIN, LAT_MAX, GRID_RESOLUTION)
+    lons = np.arange(LON_MIN, LON_MAX, GRID_RESOLUTION)
+
+    cells = []
+    for i, lat in enumerate(lats):
+        if lat < min_lat or lat > max_lat:
+            continue
+        for j, lon in enumerate(lons):
+            if lon < min_lon or lon > max_lon:
+                continue
+            conc = float(ice_data[i, j])
+            if conc >= threshold:
+                cells.append({
+                    "lat": round(float(lat), 2),
+                    "lon": round(float(lon), 2),
+                    "concentration": round(conc, 3),
+                })
+
+    dl = getattr(ocean_router, '_last_download', None) or {}
+    source = "USNIC" if dl.get("ice") else "synthetic"
+
+    return {"cells": cells, "source": source, "count": len(cells)}
+
+
+@router.get("/icebergs")
+async def get_icebergs():
+    """
+    Return IIP iceberg data for map visualization.
+
+    Returns iceberg limit polygon info and bulletin summary.
+    """
+    dl = getattr(ocean_router, '_last_download', None) or {}
+    iceberg_data = dl.get("icebergs", {})
+
+    result = {
+        "available": bool(iceberg_data),
+        "count": iceberg_data.get("iceberg_count", 0),
+        "source": "IIP (U.S. Coast Guard)",
+    }
+
+    # If we have the bulletin, extract key info
+    bulletin_path = iceberg_data.get("bulletin_path")
+    if bulletin_path:
+        try:
+            import os
+            if os.path.exists(bulletin_path):
+                with open(bulletin_path, "r") as f:
+                    text = f.read()
+                result["bulletin_excerpt"] = text[:500]
+                # Extract coordinates from the bulletin text
+                # IIP uses format like "48-30N 048-30W"
+                import re
+                positions = []
+                pattern = r'(\d{2})-(\d{2})([NS])\s+(\d{3})-(\d{2})([EW])'
+                for m in re.finditer(pattern, text):
+                    lat = int(m.group(1)) + int(m.group(2))/60
+                    if m.group(3) == 'S': lat = -lat
+                    lon = int(m.group(4)) + int(m.group(5))/60
+                    if m.group(6) == 'W': lon = -lon
+                    positions.append({"lat": round(lat, 4), "lon": round(lon, 4)})
+                result["positions"] = positions
+        except Exception as e:
+            logger.warning(f"Failed to parse iceberg bulletin: {e}")
+
+    # If we have the shapefile, extract the bounding box
+    shp_path = iceberg_data.get("iceberg_shp_path")
+    if shp_path:
+        try:
+            import os
+            if os.path.exists(shp_path):
+                import geopandas as gpd
+                import zipfile
+                extract_dir = os.path.join(os.path.dirname(shp_path), "iip_extracted")
+                os.makedirs(extract_dir, exist_ok=True)
+                with zipfile.ZipFile(shp_path, "r") as zf:
+                    zf.extractall(extract_dir)
+                for root, dirs, files in os.walk(extract_dir):
+                    for f in files:
+                        if f.endswith(".shp"):
+                            gdf = gpd.read_file(os.path.join(root, f))
+                            if not gdf.empty:
+                                bounds = gdf.total_bounds  # [minx, miny, maxx, maxy]
+                                result["limit_boundary"] = {
+                                    "min_lon": round(float(bounds[0]), 2),
+                                    "min_lat": round(float(bounds[1]), 2),
+                                    "max_lon": round(float(bounds[2]), 2),
+                                    "max_lat": round(float(bounds[3]), 2),
+                                }
+                                # Extract simplified polygon coordinates for rendering
+                                coords = []
+                                for _, row in gdf.iterrows():
+                                    if row.geometry and not row.geometry.is_empty:
+                                        simplified = row.geometry.simplify(0.5)
+                                        if hasattr(simplified, 'exterior'):
+                                            for x, y in simplified.exterior.coords:
+                                                coords.append({"lat": round(y, 3), "lon": round(x, 3)})
+                                        elif hasattr(simplified, 'geoms'):
+                                            for geom in simplified.geoms:
+                                                if hasattr(geom, 'exterior'):
+                                                    for x, y in geom.exterior.coords:
+                                                        coords.append({"lat": round(y, 3), "lon": round(x, 3)})
+                                result["limit_polygon"] = coords[:200]  # Cap at 200 points
+                            break
+        except Exception as e:
+            logger.warning(f"Failed to parse IIP shapefile: {e}")
+
+    return result
+
+
+# ═══════════════════════════════════════════════════════════════════
+# INTERNAL HELPERS
+# ═══════════════════════════════════════════════════════════════════
+
+def _get_data_sources_dict() -> dict:
+    """Build data sources dict from the router's last download results."""
+    dl = getattr(ocean_router, '_last_download', None) or {}
+
+    return {
+        "wind": "NOAA GFS" if dl.get("gfs") else "synthetic_climatological",
+        "waves": "NOAA WW3" if dl.get("ww3") else "synthetic_climatological",
+        "currents": "NOAA RTOFS" if dl.get("rtofs") else "synthetic_climatological",
+        "ice": "USNIC" if dl.get("ice") else "synthetic_seasonal",
+        "icebergs": f"IIP ({dl['icebergs'].get('iceberg_count', 0)} tracked)" if dl.get("icebergs") else "not_available",
+    }
+
+
+def _get_data_source_label() -> str:
+    """Get a summary label for the current data source mix."""
+    dl = getattr(ocean_router, '_last_download', None) or {}
+    live_count = sum(1 for k in ["gfs", "ww3", "rtofs"] if dl.get(k))
+
+    if live_count == 3:
+        return "NOAA_live"
+    elif live_count > 0:
+        return "NOAA_partial"
+    else:
+        return "synthetic_climatological"
+

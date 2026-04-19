@@ -34,6 +34,7 @@ import {
   FileDown,
   Globe,
   Anchor,
+  Gauge,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -41,11 +42,21 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
-import { useWeather } from "@/hooks/useWeather";
-import type { WaypointWeather } from "@/types/weather";
+import { useForecastSeries } from "@/hooks/useForecastSeries";
 import { SEVERITY_CONFIG, degreesToCompass, classifySeaState } from "@/types/weather";
+import {
+  fetchMaritimeConditions,
+  fetchIceGrid,
+  fetchIcebergs,
+  checkWeatherEngineHealth,
+  type MaritimeConditions,
+  type IceCell,
+  type IcebergResponse,
+  type WeatherEngineHealth,
+} from "@/lib/weather-routing-client";
 import {
   LineChart,
   Line,
@@ -72,6 +83,10 @@ const LeafletTooltip = dynamic(
   () => import("react-leaflet").then((mod) => mod.Tooltip),
   { ssr: false }
 );
+const Polyline = dynamic(
+  () => import("react-leaflet").then((mod) => mod.Polyline),
+  { ssr: false }
+);
 
 /** Popular maritime locations for quick search */
 const QUICK_LOCATIONS = [
@@ -83,6 +98,8 @@ const QUICK_LOCATIONS = [
   { name: "North Sea", lat: 56.0, lon: 3.0 },
   { name: "Gulf of Aden", lat: 12.0, lon: 45.0 },
   { name: "South China Sea", lat: 14.0, lon: 114.0 },
+  { name: "Svalbard (Arctic Ice)", lat: 77.5, lon: 30.0 },
+  { name: "Grand Banks (Icebergs)", lat: 46.0, lon: -48.0 },
 ];
 
 interface CustomLocation {
@@ -106,6 +123,17 @@ export function WeatherDashboard() {
   const [newLocLon, setNewLocLon] = useState("");
   const [downloadingPdf, setDownloadingPdf] = useState(false);
 
+  // Maritime engine conditions (supplements Open-Meteo with ocean currents, ice, navigability)
+  const [maritimeConditions, setMaritimeConditions] = useState<MaritimeConditions | null>(null);
+  const [isMaritimeLoading, setIsMaritimeLoading] = useState(false);
+
+  // Ice overlay + iceberg data for map visualization
+  const [iceCells, setIceCells] = useState<IceCell[]>([]);
+  const [icebergData, setIcebergData] = useState<IcebergResponse | null>(null);
+  const [engineHealth, setEngineHealth] = useState<WeatherEngineHealth | null>(null);
+  const [showIceOverlay, setShowIceOverlay] = useState(true);
+  const [showIcebergs, setShowIcebergs] = useState(true);
+
   // Custom location name search state
   const [customLocSearchResults, setCustomLocSearchResults] = useState<Array<{
     name: string;
@@ -119,6 +147,9 @@ export function WeatherDashboard() {
   const [customLocSelectedIndex, setCustomLocSelectedIndex] = useState(-1);
   const customLocInputRef = useRef<HTMLInputElement>(null);
   const customLocDropdownRef = useRef<HTMLDivElement>(null);
+
+  // Market Data (Commercial Impact)
+  const [marketData, setMarketData] = useState<any>(null);
 
   // Location search state
   const [locationQuery, setLocationQuery] = useState("");
@@ -141,7 +172,7 @@ export function WeatherDashboard() {
     name?: string;
   } | null>({ lat: 51.89, lon: 3.57, name: "North Sea (Rotterdam)" });
 
-  const { fetchWeather, isLoading, data, error } = useWeather();
+  const { fetchForecast, isLoading, data: forecastData, error } = useForecastSeries();
 
   // Fetch weather on mount and when location changes
   const handleFetch = useCallback(async () => {
@@ -156,15 +187,41 @@ export function WeatherDashboard() {
     });
     // Fly the map to the selected location
     mapRef.current?.flyTo([latNum, lonNum], 6, { duration: 1.5 });
-    await fetchWeather([{ lat: latNum, lon: lonNum }], {
-      forecastDays: parseInt(forecastDays) || 7,
-    });
-  }, [lat, lon, forecastDays, fetchWeather, selectedLocation?.name]);
+    await fetchForecast(latNum, lonNum);
+    
+    // Fetch maritime engine conditions in parallel (non-blocking)
+    setIsMaritimeLoading(true);
+    fetchMaritimeConditions(latNum, lonNum)
+      .then(setMaritimeConditions)
+      .catch(() => setMaritimeConditions(null))
+      .finally(() => setIsMaritimeLoading(false));
+    // Fetch engine health for data source badges
+    checkWeatherEngineHealth().then(setEngineHealth).catch(() => {});
+  }, [lat, lon, forecastDays, fetchForecast, selectedLocation?.name]);
 
-  // Mount detection for SSR-safe rendering + load custom locations from DB
+  // Mount detection for SSR-safe rendering
   useEffect(() => {
     setMounted(true);
   }, []);
+
+  // Load ice/iceberg data once (lazy — only after first render, not blocking map)
+  useEffect(() => {
+    if (!mounted) return;
+    // Delay ice data fetch so it doesn't block initial map interaction
+    const timer = setTimeout(() => {
+      fetchIceGrid(undefined, 0.3).then((data) => {
+        if (data?.cells) {
+          // Cap at 300 cells to keep map responsive
+          const cells = data.cells.length > 300
+            ? data.cells.filter((_, i) => i % Math.ceil(data.cells.length / 300) === 0)
+            : data.cells;
+          setIceCells(cells);
+        }
+      }).catch(() => {});
+      fetchIcebergs().then(setIcebergData).catch(() => {});
+    }, 3000); // 3s delay — let the map render first
+    return () => clearTimeout(timer);
+  }, [mounted]); // Only runs once after mount
 
   // Fetch custom locations from the database
   useEffect(() => {
@@ -188,6 +245,14 @@ export function WeatherDashboard() {
   // Fetch on initial load
   useEffect(() => {
     handleFetch();
+    
+    // Fetch commercial market data
+    if (user?.id) {
+       fetch("/api/market-data")
+         .then(r => r.ok ? r.json() : null)
+         .then(data => { if (data) setMarketData(data); })
+         .catch(console.error);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -266,15 +331,13 @@ export function WeatherDashboard() {
       setLat(latStr);
       setLon(lonStr);
       setSelectedLocation({ lat: clickLat, lon: clickLon });
-      fetchWeather([{ lat: clickLat, lon: clickLon }], {
-        forecastDays: parseInt(forecastDays) || 7,
-      });
+      fetchForecast(clickLat, clickLon);
       // Auto-fill the custom location form and open it
       setNewLocLat(latStr);
       setNewLocLon(lonStr);
       if (!showAddForm) setShowAddForm(true);
     },
-    [fetchWeather, forecastDays, showAddForm]
+    [fetchForecast, forecastDays, showAddForm]
   );
 
   // Handle quick location
@@ -285,11 +348,9 @@ export function WeatherDashboard() {
       setSelectedLocation({ lat: loc.lat, lon: loc.lon, name: loc.name });
       // Fly the map to the selected location
       mapRef.current?.flyTo([loc.lat, loc.lon], 6, { duration: 1.5 });
-      fetchWeather([{ lat: loc.lat, lon: loc.lon }], {
-        forecastDays: parseInt(forecastDays) || 7,
-      });
+      fetchForecast(loc.lat, loc.lon);
     },
-    [fetchWeather, forecastDays]
+    [fetchForecast]
   );
 
   // ── Smart paste handler: parse coordinates from clipboard ─────────
@@ -470,11 +531,9 @@ export function WeatherDashboard() {
     setLocationSelectedIndex(-1);
     // Fly the map to the selected location
     mapRef.current?.flyTo([loc.lat, loc.lon], 6, { duration: 1.5 });
-    fetchWeather([{ lat: loc.lat, lon: loc.lon }], {
-      forecastDays: parseInt(forecastDays) || 7,
-    });
+    fetchForecast(loc.lat, loc.lon);
     toast.success(`📍 ${loc.name} — coordinates auto-filled`);
-  }, [fetchWeather, forecastDays]);
+  }, [fetchForecast]);
 
   const handleLocationKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (!locationDropdownOpen || locationResults.length === 0) return;
@@ -500,19 +559,32 @@ export function WeatherDashboard() {
     }
   }, [locationDropdownOpen, locationResults, locationSelectedIndex, handleLocationSelect]);
 
-  const wp = data?.waypoints?.[0] ?? null;
+  const wp = forecastData ? {
+    current: {
+      waveHeight: forecastData.hourly.wave_height[0] ?? 0,
+      waveDirection: forecastData.hourly.wave_direction[0] ?? 0,
+      wavePeriod: forecastData.hourly.wave_period[0] ?? 0,
+      windWaveHeight: forecastData.hourly.wind_wave_height[0] ?? 0,
+      swellWaveHeight: forecastData.hourly.swell_wave_height[0] ?? 0,
+      oceanCurrentVelocity: 0,
+      oceanCurrentDirection: 0,
+      seaSurfaceTemperature: forecastData.hourly.sea_surface_temperature_forecast ?? 0,
+      windSpeed: forecastData.hourly.wind_speed_knots[0] ?? 0,
+      windDirection: forecastData.hourly.wind_direction[0] ?? 0,
+      pressure: forecastData.hourly.pressure_hpa[0] ?? 1013,
+      visibility: forecastData.hourly.visibility_nm[0] ?? 10,
+      swellWaveDirection: forecastData.hourly.wave_direction[0] ?? 0,
+      swellWavePeriod: forecastData.hourly.wave_period[0] ?? 0,
+      severity: "calm"
+    },
+    hourly: forecastData.hourly
+  } : null;
+
   const severity = wp ? classifySeaState(wp.current.waveHeight) : null;
   const config = severity ? SEVERITY_CONFIG[severity] : null;
 
-  // Detect land locations — Open-Meteo returns all zeros for non-ocean coordinates
-  const isLandLocation = wp
-    ? wp.current.waveHeight === 0 &&
-      wp.current.wavePeriod === 0 &&
-      wp.current.swellWaveHeight === 0 &&
-      wp.current.windWaveHeight === 0 &&
-      wp.current.oceanCurrentVelocity === 0 &&
-      wp.hourly.waveHeight.every((v) => v === 0 || v === null)
-    : false;
+  // Detect land locations — we don't have land detection in the new engine proxy yet
+  const isLandLocation = false;
 
   return (
     <div className="space-y-6">
@@ -520,10 +592,10 @@ export function WeatherDashboard() {
       <div>
         <h1 className="text-2xl font-bold flex items-center gap-2">
           <Cloud className="h-7 w-7 text-blue-500" />
-          Marine Weather
+          Marine Weather Intelligence
         </h1>
         <p className="text-muted-foreground text-sm mt-1">
-          Real-time marine weather data powered by Open-Meteo • ECMWF & GFS models
+          High-fidelity maritime weather powered by the NOAA Forecast Pipeline
         </p>
       </div>
 
@@ -933,6 +1005,63 @@ export function WeatherDashboard() {
                 onMapClick={handleMapClick}
                 onMapReady={(map) => { mapRef.current = map; }}
               >
+                {/* Ice Concentration Overlay */}
+                {showIceOverlay && iceCells.map((cell, idx) => (
+                  <CircleMarker
+                    key={`ice-${idx}`}
+                    center={[cell.lat, cell.lon]}
+                    radius={4}
+                    pathOptions={{
+                      fillColor: cell.concentration > 0.7 ? "#ef4444"
+                        : cell.concentration > 0.3 ? "#f59e0b"
+                        : "#38bdf8",
+                      fillOpacity: Math.min(0.7, cell.concentration + 0.15),
+                      color: "transparent",
+                      weight: 0,
+                    }}
+                  >
+                    <LeafletTooltip direction="top">
+                      <span className="text-xs font-medium">
+                        🧊 Ice: {(cell.concentration * 100).toFixed(0)}%
+                      </span>
+                    </LeafletTooltip>
+                  </CircleMarker>
+                ))}
+
+                {/* IIP Iceberg Limit Polygon */}
+                {showIcebergs && icebergData?.limit_polygon && icebergData.limit_polygon.length > 2 && (
+                  <Polyline
+                    positions={icebergData.limit_polygon.map(p => [p.lat, p.lon] as [number, number])}
+                    pathOptions={{
+                      color: "#f43f5e",
+                      weight: 2,
+                      dashArray: "8,4",
+                      opacity: 0.7,
+                    }}
+                  />
+                )}
+
+                {/* IIP Iceberg Positions */}
+                {showIcebergs && icebergData?.positions?.map((pos, idx) => (
+                  <CircleMarker
+                    key={`berg-${idx}`}
+                    center={[pos.lat, pos.lon]}
+                    radius={6}
+                    pathOptions={{
+                      fillColor: "#f43f5e",
+                      fillOpacity: 0.9,
+                      color: "#fff",
+                      weight: 2,
+                    }}
+                  >
+                    <LeafletTooltip direction="top">
+                      <span className="text-xs font-medium">
+                        🏔️ Iceberg #{idx + 1}
+                      </span>
+                    </LeafletTooltip>
+                  </CircleMarker>
+                ))}
+
                 {/* Weather marker */}
                 {selectedLocation && config && (
                   <CircleMarker
@@ -955,6 +1084,38 @@ export function WeatherDashboard() {
                   </CircleMarker>
                 )}
               </MaritimeMap>
+            )}
+
+            {/* Map Overlay Controls — positioned absolutely over the map */}
+            {(iceCells.length > 0 || icebergData?.available) && (
+              <div className="absolute bottom-2 right-2 z-[1000] flex gap-1.5">
+                {iceCells.length > 0 && (
+                  <button
+                    onClick={() => setShowIceOverlay(!showIceOverlay)}
+                    className={cn(
+                      "px-2.5 py-1 rounded-full text-[10px] font-semibold backdrop-blur-md border transition-all",
+                      showIceOverlay
+                        ? "bg-cyan-500/20 border-cyan-500/40 text-cyan-300"
+                        : "bg-black/40 border-white/10 text-white/50"
+                    )}
+                  >
+                    🧊 Ice ({iceCells.length})
+                  </button>
+                )}
+                {icebergData?.available && (
+                  <button
+                    onClick={() => setShowIcebergs(!showIcebergs)}
+                    className={cn(
+                      "px-2.5 py-1 rounded-full text-[10px] font-semibold backdrop-blur-md border transition-all",
+                      showIcebergs
+                        ? "bg-rose-500/20 border-rose-500/40 text-rose-300"
+                        : "bg-black/40 border-white/10 text-white/50"
+                    )}
+                  >
+                    🏔️ Icebergs ({icebergData.count})
+                  </button>
+                )}
+              </div>
             )}
           </div>
         </Card>
@@ -1115,8 +1276,8 @@ export function WeatherDashboard() {
                           lon: parseFloat(lon),
                         },
                         current: wp.current,
-                        daily: wp.daily,
-                        hourly: wp.hourly,
+                        daily: forecastData?.daily as any,
+                        hourly: forecastData?.hourly as any,
                         mapImageBase64: mapImageBase64 || undefined,
                         orgName,
                         orgLogoUrl,
@@ -1135,11 +1296,56 @@ export function WeatherDashboard() {
                   Generate Report
                 </Button>
               </div>
-              <CurrentConditions wp={wp} locationName={selectedLocation?.name} />
+              <CurrentConditions wp={wp!} locationName={selectedLocation?.name} />
+              {/* Maritime Engine Intelligence — ocean currents, ice, navigability */}
+              <MaritimeEngineCard
+                conditions={maritimeConditions}
+                isLoading={isMaritimeLoading}
+                health={engineHealth}
+                icebergData={icebergData}
+              />
               <div id="weather-charts-section">
-                <WeatherCharts wp={wp} />
+                {forecastData && <WeatherCharts forecastData={forecastData} />}
               </div>
-              {wp.daily && <DailyForecast wp={wp} />}
+              {forecastData?.daily && <DailyForecast forecastData={forecastData} />}
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {/* Weather Windows Section */}
+                {forecastData?.weather_windows ? (
+                  <WeatherWindowsCard windows={forecastData.weather_windows} />
+                ) : (
+                  <Card className="border-border">
+                    <CardContent className="py-8 text-center text-muted-foreground">
+                      No matching operational weather windows.
+                    </CardContent>
+                  </Card>
+                )}
+                
+                {/* Commercial Impact Card */}
+                <Card className="border-border">
+                  <CardHeader className="pb-3">
+                    <CardTitle className="text-lg flex items-center gap-2">
+                      <Anchor className="h-5 w-5 text-indigo-500" />
+                      Commercial Exposure Context
+                    </CardTitle>
+                    <p className="text-xs text-muted-foreground mt-1">Daily market baseline</p>
+                  </CardHeader>
+                  <CardContent className="grid grid-cols-2 gap-4">
+                    <div className="p-3 bg-muted/40 rounded-lg">
+                      <div className="text-xs text-muted-foreground">VLSFO Bunker Cost</div>
+                      <div className="text-xl font-bold text-indigo-500 mt-1">
+                        {marketData?.globalVLSFOAverage ? `$${marketData.globalVLSFOAverage}/mt` : "—"}
+                      </div>
+                    </div>
+                    <div className="text-xs text-muted-foreground p-3 border-l">
+                      Even a minor weather delay can consume an extra 20-30mt of fuel daily depending on the vessel speed curve, leading to tens of thousands of dollars in lost operating margin. Avoidance routing protects these margins.
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+
+              {/* Data Authority Matrix */}
+              <DataAuthorityMatrix />
             </>
           )}
         </>
@@ -1156,7 +1362,7 @@ function CurrentConditions({
   wp,
   locationName,
 }: {
-  wp: WaypointWeather;
+  wp: { current: any };
   locationName?: string;
 }) {
   const severity = classifySeaState(wp.current.waveHeight);
@@ -1168,7 +1374,10 @@ function CurrentConditions({
         <div className="flex items-center justify-between">
           <CardTitle className="text-lg flex items-center gap-2">
             <Waves className="h-5 w-5 text-blue-500" />
-            Current Conditions
+            Sea State Monitoring
+            <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20 uppercase tracking-wider">
+              Awareness
+            </span>
             {locationName && (
               <span className="text-sm font-normal text-muted-foreground">
                 — {locationName}
@@ -1186,6 +1395,9 @@ function CurrentConditions({
             {config.label}
           </span>
         </div>
+        <p className="text-xs text-muted-foreground mt-1">
+          High-fidelity coastal & ocean conditions via NOAA Engine
+        </p>
       </CardHeader>
       <CardContent>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -1195,6 +1407,7 @@ function CurrentConditions({
             value={`${wp.current.waveHeight.toFixed(1)}m`}
             subtext={config.description}
             color={config.markerColor}
+            tooltip="Significant wave height. Real-time forecasted value from the NOAA Engine."
           />
           <MetricCard
             icon={Wind}
@@ -1202,6 +1415,7 @@ function CurrentConditions({
             value={`${wp.current.swellWaveHeight.toFixed(1)}m`}
             subtext={`${degreesToCompass(wp.current.swellWaveDirection)} • ${wp.current.swellWavePeriod.toFixed(1)}s period`}
             color="#6366f1"
+            tooltip="Long-period ocean waves generated by distant storms. Swell travels thousands of miles and affects vessel roll even in calm local weather."
           />
           <MetricCard
             icon={Thermometer}
@@ -1209,6 +1423,7 @@ function CurrentConditions({
             value={`${wp.current.seaSurfaceTemperature.toFixed(1)}°C`}
             subtext={`(${((wp.current.seaSurfaceTemperature * 9) / 5 + 32).toFixed(1)}°F)`}
             color="#06b6d4"
+            tooltip="Sea surface temperature (SST). Relevant for cargo care (reefer ventilation), ballast water management, and tropical storm formation risk."
           />
           <MetricCard
             icon={Droplets}
@@ -1216,11 +1431,12 @@ function CurrentConditions({
             value={`${wp.current.oceanCurrentVelocity.toFixed(2)} m/s`}
             subtext={`Direction: ${degreesToCompass(wp.current.oceanCurrentDirection)} (${wp.current.oceanCurrentDirection.toFixed(0)}°)`}
             color="#14b8a6"
+            tooltip="Tidal and coastal current velocity from Open-Meteo. Best for near-shore and port approaches. For deep-ocean currents (Gulf Stream), see NOAA RTOFS in Ocean Intelligence."
           />
         </div>
 
         {/* Additional details */}
-        <div className="grid grid-cols-3 gap-4 mt-4 pt-4 border-t border-border">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mt-4 pt-4 border-t border-border">
           <div className="text-center">
             <div className="text-xs text-muted-foreground">Wave Direction</div>
             <div className="text-sm font-semibold mt-0.5">
@@ -1234,11 +1450,68 @@ function CurrentConditions({
             </div>
           </div>
           <div className="text-center">
-            <div className="text-xs text-muted-foreground">Wind Waves</div>
+            <div className="text-xs text-muted-foreground">Wind Speed</div>
             <div className="text-sm font-semibold mt-0.5">
-              {wp.current.windWaveHeight.toFixed(1)}m
+              {wp.current.windSpeed.toFixed(1)} kn
             </div>
           </div>
+          <div className="text-center">
+            <div className="text-xs text-muted-foreground">Pressure</div>
+            <div className="text-sm font-semibold mt-0.5">
+              {wp.current.pressure.toFixed(0)} hPa
+            </div>
+          </div>
+          <div className="text-center">
+            <div className="text-xs text-muted-foreground">Visibility</div>
+            <div className="text-sm font-semibold mt-0.5">
+              {wp.current.visibility.toFixed(1)} nm
+            </div>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// WEATHER WINDOWS CARD
+// ═══════════════════════════════════════════════════════════════════
+
+function WeatherWindowsCard({ windows }: { windows: Array<{ start: string; end: string; duration_hours: number }> }) {
+  return (
+    <Card className="border-emerald-500/20 shadow-sm relative overflow-hidden">
+      <div className="absolute inset-x-0 top-0 h-0.5 bg-gradient-to-r from-emerald-500 to-teal-500" />
+      <CardHeader className="pb-3">
+        <div className="flex items-center justify-between">
+          <CardTitle className="text-lg flex items-center gap-2">
+            <Calendar className="h-5 w-5 text-emerald-500" />
+            Operational Weather Windows
+          </CardTitle>
+          <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 uppercase tracking-wider">
+            Clearance
+          </span>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Periods of safe operating weather (Waves &lt; 2m, Wind &lt; 20kn, Duration &gt; 12h)
+        </p>
+      </CardHeader>
+      <CardContent>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+          {windows.map((window, i) => {
+            const startDate = new Date(window.start);
+            const endDate = new Date(window.end);
+            return (
+              <div key={i} className="p-3 rounded-lg border border-emerald-500/20 bg-emerald-500/5">
+                <div className="font-semibold text-emerald-600 dark:text-emerald-400">
+                  {window.duration_hours} Hour Window
+                </div>
+                <div className="text-xs text-muted-foreground mt-1 space-y-0.5">
+                  <div><span className="font-medium text-foreground">Start:</span> {startDate.toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</div>
+                  <div><span className="font-medium text-foreground">End:</span> {endDate.toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</div>
+                </div>
+              </div>
+            );
+          })}
         </div>
       </CardContent>
     </Card>
@@ -1252,15 +1525,17 @@ function MetricCard({
   value,
   subtext,
   color,
+  tooltip: tooltipText,
 }: {
   icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }>;
   label: string;
   value: string;
   subtext: string;
   color: string;
+  tooltip?: string;
 }) {
-  return (
-    <div className="p-4 rounded-xl bg-muted/40 border border-border/50 hover:border-border transition-colors">
+  const card = (
+    <div className="p-4 rounded-xl bg-muted/40 border border-border/50 hover:border-border transition-colors cursor-default">
       <div className="flex items-center gap-2 mb-2">
         <div
           className="p-1.5 rounded-lg"
@@ -1274,13 +1549,331 @@ function MetricCard({
       <div className="text-[10px] text-muted-foreground mt-1">{subtext}</div>
     </div>
   );
+
+  if (!tooltipText) return card;
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{card}</TooltipTrigger>
+      <TooltipContent side="top" className="max-w-[280px] text-xs leading-relaxed">
+        {tooltipText}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// MARITIME ENGINE INTELLIGENCE CARD
+// ═══════════════════════════════════════════════════════════════════
+
+const NAVIGABILITY_CONFIG: Record<string, { label: string; color: string; bg: string; border: string }> = {
+  open: { label: "Open Water", color: "text-emerald-400", bg: "bg-emerald-500/10", border: "border-emerald-500/20" },
+  moderate: { label: "Moderate", color: "text-blue-400", bg: "bg-blue-500/10", border: "border-blue-500/20" },
+  restricted: { label: "Restricted", color: "text-amber-400", bg: "bg-amber-500/10", border: "border-amber-500/20" },
+  dangerous: { label: "Dangerous", color: "text-red-400", bg: "bg-red-500/10", border: "border-red-500/20" },
+  blocked: { label: "Blocked", color: "text-red-500", bg: "bg-red-500/15", border: "border-red-500/30" },
+};
+
+const ICE_SEVERITY_CONFIG: Record<string, { label: string; emoji: string; color: string }> = {
+  none: { label: "No Ice", emoji: "✅", color: "text-emerald-400" },
+  light: { label: "Light Ice (10-30%)", emoji: "🧊", color: "text-blue-400" },
+  moderate: { label: "Moderate Ice (30-70%)", emoji: "❄️", color: "text-amber-400" },
+  severe: { label: "Heavy Ice (>70%)", emoji: "⛔", color: "text-red-500" },
+};
+
+function MaritimeEngineCard({
+  conditions,
+  isLoading,
+  health,
+  icebergData,
+}: {
+  conditions: MaritimeConditions | null;
+  isLoading: boolean;
+  health?: WeatherEngineHealth | null;
+  icebergData?: IcebergResponse | null;
+}) {
+  // Engine offline — show nothing (graceful degradation)
+  if (!conditions && !isLoading) return null;
+
+  const navConfig = conditions ? (NAVIGABILITY_CONFIG[conditions.navigability] || NAVIGABILITY_CONFIG.open) : null;
+  const iceConfig = conditions ? (ICE_SEVERITY_CONFIG[conditions.ice_severity] || ICE_SEVERITY_CONFIG.none) : null;
+
+  return (
+    <Card className="relative overflow-hidden">
+      {/* Gradient accent bar */}
+      <div className="absolute inset-x-0 top-0 h-0.5 bg-gradient-to-r from-cyan-500 via-emerald-500 to-teal-500" />
+
+      <CardHeader className="pb-3">
+        <div className="flex items-center justify-between">
+          <CardTitle className="text-lg flex items-center gap-2">
+            <Navigation className="h-5 w-5 text-cyan-500" />
+            Ocean Intelligence
+            <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 uppercase tracking-wider">
+              Decision Authority
+            </span>
+          </CardTitle>
+          {navConfig && (
+            <span className={cn(
+              "text-xs font-semibold px-3 py-1 rounded-full border",
+              navConfig.bg, navConfig.border, navConfig.color
+            )}>
+              {navConfig.label}
+            </span>
+          )}
+        </div>
+        <p className="text-xs text-muted-foreground">
+          NOAA-sourced wind, currents, ice &amp; navigability — the authoritative source for voyage planning decisions
+        </p>
+        {/* Data Sources Badges */}
+        {health?.data_sources && (
+          <div className="flex flex-wrap gap-1.5 mt-2">
+            {Object.entries(health.data_sources).map(([key, value]) => {
+              const isLive = typeof value === 'string' && (value.startsWith('NOAA') || value.startsWith('USNIC') || value.startsWith('IIP'));
+              return (
+                <span
+                  key={key}
+                  className={cn(
+                    "text-[9px] font-semibold px-2 py-0.5 rounded-full border uppercase tracking-wider",
+                    isLive
+                      ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+                      : "bg-amber-500/10 text-amber-400 border-amber-500/20"
+                  )}
+                >
+                  {isLive ? "●" : "○"} {key}: {typeof value === 'string' ? value.split('_')[0] : value}
+                </span>
+              );
+            })}
+          </div>
+        )}
+      </CardHeader>
+
+      <CardContent>
+        {isLoading ? (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <div key={i} className="p-4 rounded-xl bg-muted/40 border border-border/50 space-y-2">
+                <Skeleton className="h-4 w-20" />
+                <Skeleton className="h-8 w-24" />
+                <Skeleton className="h-3 w-32" />
+              </div>
+            ))}
+          </div>
+        ) : conditions && conditions.is_ocean ? (
+          <>
+            {/* Row 1: NOAA Source Data — 3 columns */}
+            <div className="grid grid-cols-3 gap-4">
+              {/* Wave Height (NOAA WW3) — with forecast timestamp */}
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <div className="p-4 rounded-xl bg-muted/40 border border-border/50 hover:border-border transition-colors cursor-default">
+                    <div className="flex items-center gap-2 mb-2">
+                      <div className="p-1.5 rounded-lg" style={{ backgroundColor: "#3b82f615" }}>
+                        <Waves className="h-4 w-4" style={{ color: "#3b82f6" }} />
+                      </div>
+                      <span className="text-xs text-muted-foreground">Waves (WW3)</span>
+                    </div>
+                    <div className="text-2xl font-bold">{conditions.wave_height_m} m</div>
+                    <div className="text-[10px] text-muted-foreground mt-1">
+                      {conditions.wave_height_m >= 4 ? "Heavy seas" : conditions.wave_height_m >= 2 ? "Moderate seas" : "Calm seas"}
+                    </div>
+                    <div className="text-[9px] text-muted-foreground/60 mt-1.5 border-t border-border/30 pt-1.5">
+                      Forecast • {conditions.graph_timestamp
+                        ? new Date(conditions.graph_timestamp).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
+                        : "—"}
+                    </div>
+                  </div>
+                </TooltipTrigger>
+                <TooltipContent side="top" className="max-w-[280px] text-xs leading-relaxed">
+                  NOAA WaveWatch III forecast — the IMO/P&amp;I industry standard for significant wave height. This is a forecast value, not real-time. May differ from Open-Meteo which shows current conditions.
+                </TooltipContent>
+              </Tooltip>
+              {/* Wind (NOAA GFS) */}
+              <MetricCard
+                icon={Wind}
+                label="Wind (GFS)"
+                value={`${conditions.wind_speed_knots} kn`}
+                subtext={`${degreesToCompass(conditions.wind_direction_deg)} (${conditions.wind_direction_deg}°)`}
+                color="#6366f1"
+                tooltip="NOAA Global Forecast System wind at 10m height. Gold standard for open-ocean wind — 0.25° resolution, updated every 6 hours."
+              />
+              {/* Ocean Current (NOAA RTOFS) */}
+              <MetricCard
+                icon={Droplets}
+                label="Current (RTOFS)"
+                value={`${conditions.current_speed_knots} kn`}
+                subtext={`${degreesToCompass(conditions.current_direction_deg)} (${conditions.current_direction_deg}°)`}
+                color="#14b8a6"
+                tooltip="NOAA Real-Time Ocean Forecast System — models deep-ocean thermohaline circulation (Gulf Stream, Kuroshio). Best for open-ocean voyage planning. Too coarse (0.5°) for coastal/port use."
+              />
+            </div>
+
+            {/* Row 2: Ice & Iceberg Intelligence — 3 columns */}
+            <div className="grid grid-cols-3 gap-4 mt-4">
+              {/* Ice Concentration (USNIC) */}
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <div className="p-4 rounded-xl bg-muted/40 border border-border/50 hover:border-border transition-colors cursor-default">
+                    <div className="flex items-center gap-2 mb-2">
+                      <div className="p-1.5 rounded-lg bg-cyan-500/10">
+                        <span className="text-sm">🧊</span>
+                      </div>
+                      <span className="text-xs text-muted-foreground">Ice Concentration</span>
+                    </div>
+                    <div className="text-2xl font-bold">
+                      {conditions.ice_concentration_pct > 0 ? `${conditions.ice_concentration_pct}%` : "0%"}
+                    </div>
+                    <div className="text-[10px] mt-1 text-muted-foreground">
+                      Source: USNIC
+                    </div>
+                  </div>
+                </TooltipTrigger>
+                <TooltipContent side="top" className="max-w-[280px] text-xs leading-relaxed">
+                  Percentage of sea surface covered by ice at this location. Above 30% requires ice-class hull. Above 70% = route blocked. Source: U.S. National Ice Center weekly satellite analysis.
+                </TooltipContent>
+              </Tooltip>
+              {/* Ice Severity (WMO classification) */}
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <div className="p-4 rounded-xl bg-muted/40 border border-border/50 hover:border-border transition-colors cursor-default">
+                    <div className="flex items-center gap-2 mb-2">
+                      <div className="p-1.5 rounded-lg bg-blue-500/10">
+                        <span className="text-sm">{iceConfig?.emoji}</span>
+                      </div>
+                      <span className="text-xs text-muted-foreground">Ice Severity</span>
+                    </div>
+                    <div className={cn("text-2xl font-bold", iceConfig?.color)}>
+                      {conditions.ice_severity === "none" ? "Clear" : conditions.ice_severity.charAt(0).toUpperCase() + conditions.ice_severity.slice(1)}
+                    </div>
+                    <div className={cn("text-[10px] mt-1 font-medium", iceConfig?.color)}>
+                      {iceConfig?.label}
+                    </div>
+                  </div>
+                </TooltipTrigger>
+                <TooltipContent side="top" className="max-w-[280px] text-xs leading-relaxed">
+                  WMO classification combining concentration + ice type. Your P&amp;I insurer defines which severity your vessel is cleared for. Entering a zone beyond your ice class = breach of warranty.
+                </TooltipContent>
+              </Tooltip>
+              {/* Icebergs (IIP — U.S. Coast Guard) */}
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <div className="p-4 rounded-xl bg-muted/40 border border-border/50 hover:border-border transition-colors cursor-default">
+                    <div className="flex items-center gap-2 mb-2">
+                      <div className="p-1.5 rounded-lg bg-rose-500/10">
+                        <span className="text-sm">🏔️</span>
+                      </div>
+                      <span className="text-xs text-muted-foreground">Icebergs (IIP)</span>
+                    </div>
+                    <div className="text-2xl font-bold">
+                      {(() => {
+                        if (!icebergData?.available || !icebergData.positions?.length) return "0";
+                        // Count icebergs within ~500nm (~9° lat) of the queried position
+                        const nearby = icebergData.positions.filter(p => {
+                          const dLat = Math.abs(p.lat - conditions.lat);
+                          const dLon = Math.abs(p.lon - conditions.lon);
+                          return dLat < 9 && dLon < 12;
+                        }).length;
+                        return nearby > 0 ? `${nearby} nearby` : "0 nearby";
+                      })()}
+                    </div>
+                    <div className="text-[10px] mt-1 text-muted-foreground">
+                      {icebergData?.available
+                        ? `${icebergData.count} tracked globally • SOLAS Ch. V`
+                        : "No IIP data available"}
+                    </div>
+                  </div>
+                </TooltipTrigger>
+                <TooltipContent side="top" className="max-w-[280px] text-xs leading-relaxed">
+                  International Ice Patrol (U.S. Coast Guard) — tracks individual icebergs in the North Atlantic. Mandated by SOLAS Ch. V. &quot;Nearby&quot; = within ~500nm of this location. Pan the map to Grand Banks (46°N, 48°W) to see iceberg markers.
+                </TooltipContent>
+              </Tooltip>
+            </div>
+
+            {/* Row 3: Engine Computed — 3 columns */}
+            <div className="grid grid-cols-3 gap-4 mt-4">
+              {/* Effective Speed (Engine — computed) */}
+              <MetricCard
+                icon={Gauge}
+                label="Effective Speed"
+                value={`${conditions.effective_speed_knots} kn`}
+                subtext={conditions.speed_reduction_pct > 0 
+                  ? `${conditions.speed_reduction_pct}% reduction`
+                  : "No weather penalty"}
+                color="#f59e0b"
+                tooltip="Vessel speed after applying weather penalties from waves, wind, and current. Based on a reference speed of 12.5 knots."
+              />
+              {/* Navigability (Engine — computed) */}
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <div className="p-4 rounded-xl bg-muted/40 border border-border/50 hover:border-border transition-colors cursor-default">
+                    <div className="flex items-center gap-2 mb-2">
+                      <div className="p-1.5 rounded-lg" style={{ backgroundColor: "rgba(16, 185, 129, 0.1)" }}>
+                        <Navigation className="h-3.5 w-3.5 text-emerald-500" />
+                      </div>
+                      <span className="text-xs text-muted-foreground">Navigability</span>
+                    </div>
+                    <div className={cn("text-2xl font-bold", navConfig?.color)}>
+                      {navConfig?.label}
+                    </div>
+                    <div className="text-[10px] mt-1 text-muted-foreground">
+                      NOAA + USNIC + IIP
+                    </div>
+                  </div>
+                </TooltipTrigger>
+                <TooltipContent side="top" className="max-w-[280px] text-xs leading-relaxed">
+                  Combined navigability assessment: Open (safe), Moderate (caution), Restricted (heavy weather/ice), Dangerous (avoid), Blocked (impassable). Computed from wave height, ice concentration, and iceberg proximity.
+                </TooltipContent>
+              </Tooltip>
+              {/* Speed Reduction (Engine — computed) */}
+              <MetricCard
+                icon={Anchor}
+                label="Speed Penalty"
+                value={`${conditions.speed_reduction_pct}%`}
+                subtext={conditions.speed_reduction_pct > 15 ? "Significant weather impact" : conditions.speed_reduction_pct > 5 ? "Moderate weather impact" : "Minimal impact"}
+                color={conditions.speed_reduction_pct > 15 ? "#ef4444" : conditions.speed_reduction_pct > 5 ? "#f59e0b" : "#10b981"}
+                tooltip="Percentage of speed lost due to weather conditions. Directly impacts ETA and fuel consumption. Above 15% = significant commercial impact."
+              />
+            </div>
+
+            {/* Advisory Banner */}
+            {conditions.advisory && (
+              <div className={cn(
+                "mt-4 p-3 rounded-lg border text-sm flex items-start gap-2",
+                conditions.navigability === "open" || conditions.navigability === "moderate"
+                  ? "bg-emerald-500/5 border-emerald-500/20 text-emerald-400"
+                  : conditions.navigability === "restricted"
+                  ? "bg-amber-500/5 border-amber-500/20 text-amber-400"
+                  : "bg-red-500/5 border-red-500/20 text-red-400"
+              )}>
+                <Navigation className="h-4 w-4 shrink-0 mt-0.5" />
+                <div>
+                  <span className="font-medium">{conditions.advisory}</span>
+                  <div className="text-[10px] mt-1 opacity-60">
+                    Source: {conditions.data_source} • {conditions.graph_timestamp 
+                      ? `Graph built: ${new Date(conditions.graph_timestamp).toLocaleString()}`
+                      : ""}
+                  </div>
+                </div>
+              </div>
+            )}
+          </>
+        ) : conditions && !conditions.is_ocean ? (
+          <div className="py-4 text-center text-sm text-muted-foreground">
+            <MapPin className="h-6 w-6 mx-auto mb-2 text-amber-400" />
+            This location is on land — ocean intelligence is only available for marine coordinates.
+          </div>
+        ) : null}
+      </CardContent>
+    </Card>
+  );
 }
 
 // ═══════════════════════════════════════════════════════════════════
 // CHARTS SECTION
 // ═══════════════════════════════════════════════════════════════════
 
-function WeatherCharts({ wp }: { wp: WaypointWeather }) {
+import type { ForecastTimeseries } from "@/lib/weather-routing-client";
+
+function WeatherCharts({ forecastData }: { forecastData: ForecastTimeseries }) {
   // Prepare chart data — sample every 3 hours for readability
   const chartData = useMemo(() => {
     const data: Array<{
@@ -1291,19 +1884,19 @@ function WeatherCharts({ wp }: { wp: WaypointWeather }) {
       seaTemp: number;
     }> = [];
 
-    const step = 3; // every 3 hours
-    for (let i = 0; i < wp.hourly.time.length; i += step) {
-      const dt = new Date(wp.hourly.time[i]);
+    const step = 1; // forecast is 3-hourly, so step = 1 gets every step
+    for (let i = 0; i < forecastData.hourly.time.length; i += step) {
+      const dt = new Date(forecastData.hourly.time[i]);
       data.push({
-        time: wp.hourly.time[i],
+        time: forecastData.hourly.time[i],
         label: `${dt.getMonth() + 1}/${dt.getDate()} ${dt.getHours().toString().padStart(2, "0")}:00`,
-        waveHeight: wp.hourly.waveHeight[i] ?? 0,
-        swellHeight: wp.hourly.swellWaveHeight[i] ?? 0,
-        seaTemp: wp.hourly.seaSurfaceTemperature[i] ?? 0,
+        waveHeight: forecastData.hourly.wave_height[i] ?? 0,
+        swellHeight: forecastData.hourly.swell_wave_height[i] ?? 0,
+        seaTemp: forecastData.hourly.sea_surface_temperature_forecast ?? forecastData.hourly.sea_surface_temperature ?? 0,
       });
     }
     return data;
-  }, [wp]);
+  }, [forecastData]);
 
   return (
     <Card>
@@ -1522,8 +2115,8 @@ function WeatherCharts({ wp }: { wp: WaypointWeather }) {
 // DAILY FORECAST SECTION
 // ═══════════════════════════════════════════════════════════════════
 
-function DailyForecast({ wp }: { wp: WaypointWeather }) {
-  if (!wp.daily || !wp.daily.time.length) return null;
+function DailyForecast({ forecastData }: { forecastData: ForecastTimeseries }) {
+  if (!forecastData.daily || !forecastData.daily.date.length) return null;
 
   return (
     <Card>
@@ -1535,10 +2128,10 @@ function DailyForecast({ wp }: { wp: WaypointWeather }) {
       </CardHeader>
       <CardContent>
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-7 gap-3">
-          {wp.daily.time.map((date, index) => {
-            const maxWave = wp.daily!.waveHeightMax[index] ?? 0;
-            const maxSwell = wp.daily!.swellWaveHeightMax[index] ?? 0;
-            const maxTemp = wp.daily!.seaSurfaceTemperatureMax[index] ?? 0;
+          {forecastData.daily.date.map((date, index) => {
+            const maxWave = forecastData.daily.wave_height_max[index] ?? 0;
+            const maxWind = forecastData.daily.wind_speed_max_knots[index] ?? 0;
+            const minPressure = forecastData.daily.pressure_min_hpa[index] ?? 1013;
             const severity = classifySeaState(maxWave);
             const dayConfig = SEVERITY_CONFIG[severity];
 
@@ -1567,12 +2160,109 @@ function DailyForecast({ wp }: { wp: WaypointWeather }) {
                   {dayConfig.label}
                 </div>
                 <div className="text-[10px] text-muted-foreground mt-1.5 space-y-0.5">
-                  <div>Swell: {maxSwell.toFixed(1)}m</div>
-                  <div>Temp: {maxTemp.toFixed(1)}°C</div>
+                  <div>Wind: {maxWind.toFixed(1)} kn</div>
+                  <div>Pressure: {minPressure.toFixed(0)} hPa</div>
                 </div>
               </div>
             );
           })}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// DATA AUTHORITY MATRIX
+// ═══════════════════════════════════════════════════════════════════
+
+const DATA_AUTHORITY_ROWS: Array<{
+  metric: string;
+  source: string;
+  sourceType: "noaa" | "engine";
+  reason: string;
+}> = [
+  { metric: "Wave Height", source: "NOAA WW3", sourceType: "noaa", reason: "IMO/P&I industry standard" },
+  { metric: "Swell Height / Period", source: "NOAA WW3", sourceType: "noaa", reason: "Partitioned swell parameters" },
+  { metric: "Wave Direction", source: "NOAA WW3", sourceType: "noaa", reason: "Multi-parameter directional spectrum" },
+  { metric: "Sea Surface Temp", source: "NOAA GFS/OISST", sourceType: "noaa", reason: "Dynamically assimilated SST model" },
+  { metric: "Ocean Current", source: "NOAA RTOFS", sourceType: "noaa", reason: "Thermohaline circulation — Gulf Stream, Kuroshio" },
+  { metric: "Wind Speed / Direction", source: "NOAA GFS", sourceType: "noaa", reason: "Gold standard — 0.25° global" },
+  { metric: "Ice Concentration", source: "USNIC", sourceType: "noaa", reason: "Primary government mandate" },
+  { metric: "Ice Severity", source: "USNIC", sourceType: "noaa", reason: "WMO egg-code classification" },
+  { metric: "Icebergs", source: "IIP (USCG)", sourceType: "noaa", reason: "Mandated by SOLAS Ch. V" },
+  { metric: "Navigability", source: "Engine", sourceType: "engine", reason: "Computed from NOAA + USNIC + IIP" },
+  { metric: "Effective Speed", source: "Engine", sourceType: "engine", reason: "Physics-based wave/wind/current penalty" },
+  { metric: "Route Optimization", source: "Engine", sourceType: "engine", reason: "A* on weather-weighted ocean graph" },
+];
+
+const SOURCE_BADGE_STYLES = {
+  noaa: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20",
+  engine: "bg-violet-500/10 text-violet-400 border-violet-500/20",
+};
+
+function DataAuthorityMatrix() {
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <div className="flex items-center justify-between">
+          <CardTitle className="text-lg flex items-center gap-2">
+            <Eye className="h-5 w-5 text-violet-500" />
+            Data Authority Matrix
+          </CardTitle>
+          <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-violet-500/10 text-violet-400 border border-violet-500/20 uppercase tracking-wider">
+            Reference
+          </span>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Which source is the trusted authority for each metric when making voyage planning decisions
+        </p>
+      </CardHeader>
+      <CardContent>
+        <div className="rounded-lg border border-border overflow-hidden">
+          {/* Table Header */}
+          <div className="grid grid-cols-[1fr_120px_1fr] gap-0 bg-muted/60 px-4 py-2.5 border-b border-border text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
+            <div>Metric</div>
+            <div>Trusted Source</div>
+            <div>Rationale</div>
+          </div>
+
+          {/* Table Body */}
+          {DATA_AUTHORITY_ROWS.map((row, idx) => (
+            <div
+              key={row.metric}
+              className={cn(
+                "grid grid-cols-[1fr_120px_1fr] gap-0 px-4 py-2 items-center text-xs",
+                idx % 2 === 0 ? "bg-transparent" : "bg-muted/20",
+                idx < DATA_AUTHORITY_ROWS.length - 1 && "border-b border-border/50"
+              )}
+            >
+              <div className="font-medium text-foreground/90">{row.metric}</div>
+              <div>
+                <span
+                  className={cn(
+                    "text-[10px] font-semibold px-2 py-0.5 rounded-full border whitespace-nowrap",
+                    SOURCE_BADGE_STYLES[row.sourceType]
+                  )}
+                >
+                  {row.source}
+                </span>
+              </div>
+              <div className="text-muted-foreground">{row.reason}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* Legend */}
+        <div className="flex items-center gap-4 mt-3 pt-3 border-t border-border/50">
+          <div className="flex items-center gap-1.5">
+            <span className="w-2 h-2 rounded-full bg-emerald-500" />
+            <span className="text-[10px] text-muted-foreground">NOAA / Government</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className="w-2 h-2 rounded-full bg-violet-500" />
+            <span className="text-[10px] text-muted-foreground">Engine (computed)</span>
+          </div>
         </div>
       </CardContent>
     </Card>

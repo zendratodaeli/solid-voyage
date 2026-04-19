@@ -123,3 +123,301 @@ export function weatherWaypointsToCoordinates(
 ): [number, number][] {
   return waypoints.map((wp) => [wp.lon, wp.lat] as [number, number]);
 }
+
+// ═══════════════════════════════════════════════════════════════════
+//  Maritime Conditions (Point Query)
+// ═══════════════════════════════════════════════════════════════════
+
+export interface MaritimeConditions {
+  success: boolean;
+  lat: number;
+  lon: number;
+  is_ocean: boolean;
+  // Wind
+  wind_speed_knots: number;
+  wind_direction_deg: number;
+  // Waves
+  wave_height_m: number;
+  // Ocean currents
+  current_speed_knots: number;
+  current_direction_deg: number;
+  // Ice
+  ice_concentration_pct: number;
+  ice_severity: "none" | "light" | "moderate" | "severe";
+  // Maritime impact
+  effective_speed_knots: number;
+  speed_reduction_pct: number;
+  navigability: "open" | "moderate" | "restricted" | "dangerous" | "blocked";
+  advisory: string;
+  // Metadata
+  data_source: string;
+  graph_timestamp: string | null;
+}
+
+/**
+ * Fetch maritime conditions (currents, ice, navigability) for a specific coordinate.
+ *
+ * This supplements Open-Meteo weather data with ocean-physics intelligence
+ * from the Python routing engine. Returns null if the engine is offline.
+ */
+export async function fetchMaritimeConditions(
+  lat: number,
+  lon: number,
+  vesselSpeed: number = 12.5
+): Promise<MaritimeConditions | null> {
+  try {
+    const params = new URLSearchParams({
+      lat: lat.toFixed(4),
+      lon: lon.toFixed(4),
+      vessel_speed: vesselSpeed.toString(),
+    });
+
+    const response = await fetch(`/api/weather-routing/conditions?${params}`);
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const json = await response.json();
+    if (!json.success || !json.data) {
+      return null;
+    }
+
+    return json.data as MaritimeConditions;
+  } catch {
+    // Engine offline — graceful degradation
+    return null;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Ice Grid (Map Overlay)
+// ═══════════════════════════════════════════════════════════════════
+
+export interface IceCell {
+  lat: number;
+  lon: number;
+  concentration: number;
+}
+
+export interface IceGridResponse {
+  cells: IceCell[];
+  source: string;
+  count: number;
+}
+
+/**
+ * Fetch ice concentration grid data for map overlay rendering.
+ * Returns cells with ice concentration above threshold for the given bounds.
+ */
+export async function fetchIceGrid(
+  bounds?: { minLat: number; maxLat: number; minLon: number; maxLon: number },
+  threshold: number = 0.05
+): Promise<IceGridResponse | null> {
+  try {
+    const params = new URLSearchParams({ threshold: threshold.toString() });
+    if (bounds) {
+      params.set("min_lat", bounds.minLat.toString());
+      params.set("max_lat", bounds.maxLat.toString());
+      params.set("min_lon", bounds.minLon.toString());
+      params.set("max_lon", bounds.maxLon.toString());
+    }
+
+    const response = await fetch(`/api/weather-routing/ice-grid?${params}`);
+    if (!response.ok) return null;
+    return await response.json();
+  } catch {
+    return null;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Icebergs (Map Markers)
+// ═══════════════════════════════════════════════════════════════════
+
+export interface IcebergPosition {
+  lat: number;
+  lon: number;
+}
+
+export interface IcebergResponse {
+  available: boolean;
+  count: number;
+  source: string;
+  positions?: IcebergPosition[];
+  bulletin_excerpt?: string;
+  limit_boundary?: {
+    min_lon: number;
+    min_lat: number;
+    max_lon: number;
+    max_lat: number;
+  };
+  limit_polygon?: IcebergPosition[];
+}
+
+/**
+ * Fetch IIP iceberg data including positions and iceberg limit polygon.
+ */
+export async function fetchIcebergs(): Promise<IcebergResponse | null> {
+  try {
+    const response = await fetch("/api/weather-routing/icebergs");
+    if (!response.ok) return null;
+    return await response.json();
+  } catch {
+    return null;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Multi-Step Forecast Series (Replaces Open-Meteo)
+// ═══════════════════════════════════════════════════════════════════
+
+export interface ForecastTimeseries {
+  success: boolean;
+  lat: number;
+  lon: number;
+  source: string;
+  cycle: string;
+  grid_resolution: string;
+  hourly: {
+    time: string[];
+    wave_height: number[];
+    wave_direction: number[];
+    wave_period: number[];
+    swell_wave_height: number[];
+    wind_wave_height: number[];
+    wind_speed_knots: number[];
+    wind_direction: number[];
+    beaufort: number[];
+    pressure_hpa: number[];
+    visibility_nm: number[];
+    sea_surface_temperature?: number | null;
+    sea_surface_temperature_forecast?: number | null;
+  };
+  daily: {
+    date: string[];
+    wave_height_max: number[];
+    wind_speed_max_knots: number[];
+    pressure_min_hpa: number[];
+  };
+  weather_windows: Array<{
+    start: string;
+    end: string;
+    duration_hours: number;
+  }>;
+}
+
+/**
+ * Fetch authoritative NOAA multi-step forecast from the engine.
+ *
+ * @param lat Latitude
+ * @param lon Longitude
+ * @returns Fully populated `ForecastTimeseries` or null if offline.
+ */
+export async function fetchForecastSeries(
+  lat: number,
+  lon: number
+): Promise<ForecastTimeseries | null> {
+  try {
+    const response = await fetch(`/api/forecast-series?lat=${lat}&lon=${lon}`);
+    if (!response.ok) {
+        console.warn(`[WeatherRouting] Forecast fetch failed: ${response.status}`);
+        return null;
+    }
+    return await response.json();
+  } catch (error) {
+    console.warn(`[WeatherRouting] Forecast engine unreachable:`, error);
+    return null;
+  }
+}
+
+
+// ═══════════════════════════════════════════════════════════════════
+//  Route Forecast — Time-Aware Weather Along NavAPI Waypoints
+// ═══════════════════════════════════════════════════════════════════
+
+export interface RouteForecastWaypoint {
+  lat: number;
+  lon: number;
+  eta: string;
+  hours_from_departure: number;
+  distance_from_departure_nm: number;
+  // Weather at ETA
+  wave_height_m: number;
+  wave_period_s: number;
+  wave_direction_deg: number;
+  swell_height_m: number;
+  wind_speed_knots: number;
+  wind_direction_deg: number;
+  pressure_hpa: number;
+  visibility_nm: number;
+  beaufort: number;
+  sea_surface_temperature: number | null;
+  // Vessel-specific impact
+  speed_loss_pct: number;
+  effective_speed_knots: number;
+  navigability: "open" | "moderate" | "restricted" | "dangerous";
+  advisory: string;
+}
+
+export interface RouteForecastResponse {
+  success: boolean;
+  waypoints: RouteForecastWaypoint[];
+  total_distance_nm: number;
+  total_hours_calm: number;
+  total_hours_weather: number;
+  weather_delay_hours: number;
+  worst_segment: RouteForecastWaypoint | null;
+  vessel_speed_curve: {
+    vessel_type: string;
+    dwt: number;
+    block_coefficient: number;
+    reference_losses: {
+      wave_2m_pct: number;
+      wave_4m_pct: number;
+      wave_6m_pct: number;
+    };
+  };
+  source: string;
+  cycle: string | null;
+  error?: string;
+}
+
+export interface RouteForecastRequest {
+  waypoints: Array<{ lat: number; lon: number }>;
+  etd: string;
+  vessel_speed_knots: number;
+  vessel_type?: string;
+  vessel_dwt?: number;
+  vessel_loa?: number | null;
+  vessel_beam?: number | null;
+}
+
+/**
+ * Fetch time-aware weather forecast along a planned route.
+ *
+ * Sends NavAPI waypoints + vessel characteristics to the engine.
+ * Returns per-waypoint weather AT the vessel's ETA with speed penalties.
+ */
+export async function fetchRouteForecast(
+  request: RouteForecastRequest
+): Promise<RouteForecastResponse | null> {
+  try {
+    const response = await fetch("/api/route-forecast", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request),
+    });
+
+    if (!response.ok) {
+      console.warn(`[WeatherRouting] Route forecast failed: ${response.status}`);
+      return null;
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.warn(`[WeatherRouting] Route forecast engine unreachable:`, error);
+    return null;
+  }
+}
+
