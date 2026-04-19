@@ -21,8 +21,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY app/ app/
 
-# Create data directories for all NOAA sources
-RUN mkdir -p data/gfs data/ww3 data/rtofs data/ice data/icebergs
+# Create data directories for all weather sources (NOAA + ECMWF)
+RUN mkdir -p data/gfs data/ww3 data/rtofs data/ice data/icebergs data/ecmwf data/oisst data/forecast
 
 # Environment
 ENV PYTHONUNBUFFERED=1
