@@ -22,7 +22,7 @@ jobs:
         with:
           host: 195.201.27.96
           username: root
-          key: ${{ secrets.HETZNER_SSH_KEY }}
+          password: ${{ secrets.HETZNER_PASSWORD }}
           port: 22
           script_stop: true
           # Timeout per command
