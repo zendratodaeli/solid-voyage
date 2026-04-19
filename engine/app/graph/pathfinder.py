@@ -195,16 +195,55 @@ class OceanRouter:
             self.forecast_store = store
 
             logger.info(
-                f"✅ ForecastStore ready — "
+                f"✅ ForecastStore ready (NOAA GFS/WW3) — "
                 f"{store.n_steps} steps, "
                 f"{store.n_lat}×{store.n_lon} grid, "
                 f"sources: {store.sources}"
             )
 
+            # ── ECMWF Enhancement ────────────────────────────────────────
+            # Try to download and blend ECMWF IFS+WAM for superior 15-day forecasts.
+            # This is non-blocking: if ECMWF is unavailable, GFS/WW3 stays active.
+            self._try_load_ecmwf(store)
+
         except Exception as e:
             logger.error(f"⚠️ ForecastStore build failed (routing unaffected): {e}")
             import traceback
             traceback.print_exc()
+
+    def _try_load_ecmwf(self, store) -> None:
+        """
+        Attempt to download ECMWF Open Data and blend it into the ForecastStore.
+        Runs after NOAA GFS/WW3 is already in memory — completely non-destructive on failure.
+        """
+        try:
+            from app.data.ecmwf_parser import ECMWFStore
+            from app.config import ECMWF_DIR
+            import os
+
+            os.makedirs(ECMWF_DIR, exist_ok=True)
+            ecmwf = ECMWFStore(n_lat=store.n_lat, n_lon=store.n_lon)
+
+            success = ecmwf.load(ecmwf_dir=ECMWF_DIR)
+            if success:
+                blended = store.blend_with_ecmwf(ecmwf)
+                if blended:
+                    logger.info(
+                        "🌍 ECMWF IFS+WAM active — 15-day forecast engaged. "
+                        "NOAA RTOFS currents + USNIC ice retained."
+                    )
+                else:
+                    logger.info("ECMWF blend skipped — NOAA GFS/WW3 remains active")
+            else:
+                logger.info(
+                    "ECMWF data unavailable or insufficient — "
+                    "NOAA GFS/WW3 7-day forecast active (fallback)"
+                )
+
+        except Exception as e:
+            logger.warning(f"ECMWF load failed (non-fatal): {e}")
+            # GFS/WW3 store is untouched — routing and forecasts continue normally
+
 
     def _parse_gfs_variable(
         self, file_paths: dict, var_key: str, n_lat: int, n_lon: int

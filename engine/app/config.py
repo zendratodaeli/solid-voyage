@@ -11,12 +11,25 @@ LON_MIN = -180.0
 LON_MAX = 180.0
 
 # --- Forecast Configuration ---
-# GFS/WW3 forecast steps: 0h to 168h (7 days) every 3 hours = 57 steps
+# Primary: ECMWF IFS+WAM — 15-day forecast at 6-hour steps
+# Fallback: NOAA GFS+WW3 — 7-day forecast at 3-hour steps
 FORECAST_RESOLUTION = 0.25  # degrees — forecast time series resolution (matches Kepler)
-FORECAST_HOURS = list(range(0, 171, 3))  # [0, 3, 6, ..., 168]
+
+# ECMWF provides 0-360h at 6h steps = 61 steps (15 days)
+# GFS provides 0-168h at 3h steps = 57 steps (7 days)
+# We use ECMWF steps for the primary store, GFS fills when ECMWF is unavailable
+FORECAST_HOURS = list(range(0, 361, 6))   # [0, 6, 12, ..., 360] — 61 steps, 15 days
+FORECAST_HOURS_GFS = list(range(0, 171, 3))  # [0, 3, 6, ..., 168] — 57 steps, 7 days
+
 FORECAST_DOWNLOAD_THREADS = 8  # Parallel GRIB downloads
 GFS_RESOLUTION = "0p25"  # 0.25° product (highest available)
 WW3_RESOLUTION = "0p25"  # 0.25° product
+
+# ECMWF Open Data — free tier (CC-BY 4.0), same 0.25° resolution as GFS
+# Provides IFS atmosphere + WAM wave model for 15 days
+# Updated twice daily at 00 UTC and 12 UTC (available ~6h after run)
+ECMWF_OPEN_DATA_URL = "https://data.ecmwf.int/forecasts"
+ECMWF_FORECAST_HORIZON_HOURS = 360  # 15 days
 
 # --- Vessel Defaults ---
 DEFAULT_VESSEL_SPEED_KNOTS = 12.5
@@ -49,6 +62,7 @@ ICE_DIR = os.path.join(DATA_DIR, "ice")
 ICEBERG_DIR = os.path.join(DATA_DIR, "icebergs")
 FORECAST_DIR = os.path.join(DATA_DIR, "forecast")
 OISST_DIR = os.path.join(DATA_DIR, "oisst")
+ECMWF_DIR = os.path.join(DATA_DIR, "ecmwf")   # ECMWF GRIB storage
 LAND_MASK_PATH = os.path.join(DATA_DIR, "land_mask.npy")
 
 # --- Graph Rebuild ---
