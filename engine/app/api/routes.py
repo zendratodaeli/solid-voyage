@@ -173,13 +173,14 @@ async def get_route_forecast(request: RouteForecastRequest):
 
     For each NavAPI waypoint:
     1. Calculates the vessel's ETA at that point (accounting for speed penalties at prior waypoints)
-    2. Extracts the NOAA forecast at the EXACT future timestamp when the vessel will be there
+    2. Extracts ECMWF IFS/WAM weather + NOAA currents/ice at the EXACT future timestamp
     3. Applies vessel-class-specific speed curves (Capesize vs Handysize)
-    4. Returns per-waypoint advisory and total weather delay estimate
+    4. Returns per-waypoint weather, currents, ice, navigability, and total delay estimate
 
     This is what commercial weather routing services charge $50k/year for.
     """
     from datetime import datetime, timezone, timedelta
+    import math
     from app.models.schemas import (
         RouteForecastRequest as RFR,
         RouteForecastResponse,
@@ -266,6 +267,42 @@ async def get_route_forecast(request: RouteForecastRequest):
         if "error" in wx:
             continue
 
+        # ── Extract ocean currents (NOAA RTOFS) ──
+        cur_speed_kn = 0.0
+        cur_dir_deg = 0.0
+        weather_data = getattr(ocean_router, '_weather_data', None)
+        if weather_data is not None:
+            from app.data.land_mask import lat_to_index, lon_to_index
+            ci = lat_to_index(wp.lat)
+            cj = lon_to_index(wp.lon)
+            try:
+                cu = float(weather_data["current_u"][ci, cj])
+                cv = float(weather_data["current_v"][ci, cj])
+                cur_speed_kn = round(math.sqrt(cu**2 + cv**2) * 1.944, 2)
+                cur_dir_deg = round((math.degrees(math.atan2(cu, cv)) + 360) % 360, 0)
+            except (IndexError, KeyError, TypeError):
+                pass
+
+        # ── Extract ice concentration (NOAA USNIC) ──
+        ice_conc = 0.0
+        ice_severity = "none"
+        ice_data = getattr(ocean_router, '_ice_data', None)
+        if ice_data is not None:
+            from app.data.land_mask import lat_to_index, lon_to_index
+            ii = lat_to_index(wp.lat)
+            ij = lon_to_index(wp.lon)
+            try:
+                if ii < ice_data.shape[0] and ij < ice_data.shape[1]:
+                    ice_conc = float(ice_data[ii, ij])
+            except (IndexError, TypeError):
+                pass
+            if ice_conc >= 0.70:
+                ice_severity = "severe"
+            elif ice_conc >= 0.30:
+                ice_severity = "moderate"
+            elif ice_conc >= 0.10:
+                ice_severity = "light"
+
         # Compute vessel-specific speed penalty at this waypoint
         loss_pct = speed_curve.speed_loss_pct(
             wave_height=wx.get("wave_height_m", 0),
@@ -279,15 +316,25 @@ async def get_route_forecast(request: RouteForecastRequest):
             wind_speed_knots=wx.get("wind_speed_knots", 0),
         )
 
-        # Navigability classification
+        # Navigability classification (includes ice)
         wave_h = wx.get("wave_height_m", 0)
         wind_kn = wx.get("wind_speed_knots", 0)
-        if wave_h >= 6.0:
+        if ice_conc >= 0.70:
+            navigability = "blocked"
+            advisory = f"⛔ Heavy ice ({round(ice_conc*100)}%) — impassable without icebreaker"
+        elif wave_h >= 6.0:
             navigability = "dangerous"
             advisory = f"⚠️ Dangerous seas ({wave_h:.1f}m) — consider route deviation"
-        elif wave_h >= 4.0 or wind_kn >= 34:
+        elif ice_conc >= 0.30 or wave_h >= 4.0 or wind_kn >= 34:
             navigability = "restricted"
-            advisory = f"Heavy weather ({wave_h:.1f}m waves, BF{wx.get('beaufort', 0)}) — speed reduction expected"
+            parts = []
+            if ice_conc >= 0.30:
+                parts.append(f"Ice zone ({round(ice_conc*100)}%)")
+            if wave_h >= 4.0:
+                parts.append(f"Heavy seas ({wave_h:.1f}m)")
+            if wind_kn >= 34:
+                parts.append(f"Gale force BF{wx.get('beaufort', 0)}")
+            advisory = " + ".join(parts) + " — speed reduction expected"
         elif wave_h >= 2.5 or wind_kn >= 22:
             navigability = "moderate"
             advisory = f"Moderate seas ({wave_h:.1f}m, {wind_kn:.0f}kn) — minor delay"
@@ -311,6 +358,10 @@ async def get_route_forecast(request: RouteForecastRequest):
             visibility_nm=wx.get("visibility_nm", 0),
             beaufort=wx.get("beaufort", 0),
             sea_surface_temperature=wx.get("sea_surface_temperature"),
+            current_speed_knots=cur_speed_kn,
+            current_direction_deg=cur_dir_deg,
+            ice_concentration_pct=round(ice_conc * 100, 1),
+            ice_severity=ice_severity,
             speed_loss_pct=loss_pct,
             effective_speed_knots=eff_speed,
             navigability=navigability,
@@ -335,7 +386,7 @@ async def get_route_forecast(request: RouteForecastRequest):
         weather_delay_hours=round(max(0, weather_delay), 1),
         worst_segment=worst_wp,
         vessel_speed_curve=speed_curve.to_dict(),
-        source="NOAA_GFS_WW3_0p25",
+        source="ECMWF+NOAA",
         cycle=store.cycle_timestamp.isoformat() if store.cycle_timestamp else None,
     )
 

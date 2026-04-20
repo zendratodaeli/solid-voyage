@@ -172,6 +172,14 @@ class WaypointForecast(BaseModel):
     beaufort: int = 0
     sea_surface_temperature: Optional[float] = None
 
+    # Ocean currents (NOAA RTOFS)
+    current_speed_knots: float = 0.0
+    current_direction_deg: float = 0.0
+
+    # Ice (NOAA USNIC)
+    ice_concentration_pct: float = 0.0
+    ice_severity: str = "none"  # none | light | moderate | severe
+
     # Vessel-specific impact
     speed_loss_pct: float = 0.0
     effective_speed_knots: float = 0.0
@@ -189,7 +197,7 @@ class RouteForecastResponse(BaseModel):
     weather_delay_hours: float = 0.0   # Difference
     worst_segment: Optional[WaypointForecast] = None
     vessel_speed_curve: dict = Field(default_factory=dict)
-    source: str = "NOAA_GFS_WW3_0p25"
+    source: str = "ECMWF+NOAA"
     cycle: Optional[str] = None
     error: Optional[str] = None
 
