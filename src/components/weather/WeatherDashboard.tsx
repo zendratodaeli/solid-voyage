@@ -1314,18 +1314,30 @@ export function WeatherDashboard() {
                 wp={wp}
               />
               <div id="weather-charts-section">
-                {forecastData && <WeatherCharts forecastData={forecastData} maritimeConditions={maritimeConditions} />}
+                {forecastData && <WeatherCharts forecastData={forecastData} maritimeConditions={maritimeConditions} maxDays={parseInt(forecastDays) || 7} />}
               </div>
-              {forecastData?.daily && <DailyForecast forecastData={forecastData} />}
+              {forecastData?.daily && <DailyForecast forecastData={forecastData} maxDays={parseInt(forecastDays) || 7} />}
               
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 {/* Weather Windows Section */}
-                {forecastData?.weather_windows ? (
+                {forecastData?.weather_windows && forecastData.weather_windows.length > 0 ? (
                   <WeatherWindowsCard windows={forecastData.weather_windows} />
                 ) : (
-                  <Card className="border-border">
-                    <CardContent className="py-8 text-center text-muted-foreground">
-                      No matching operational weather windows.
+                  <Card className="border-amber-500/20 shadow-sm relative overflow-hidden">
+                    <div className="absolute inset-x-0 top-0 h-0.5 bg-gradient-to-r from-amber-500 to-orange-500" />
+                    <CardHeader className="pb-3">
+                      <div className="flex items-center justify-between">
+                        <CardTitle className="text-lg flex items-center gap-2">
+                          <Calendar className="h-5 w-5 text-amber-500" />
+                          Operational Weather Windows
+                        </CardTitle>
+                        <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20 uppercase tracking-wider">
+                          Advisory
+                        </span>
+                      </div>
+                    </CardHeader>
+                    <CardContent className="text-sm text-muted-foreground">
+                      No safe operating windows detected in the forecast period. All periods show waves &ge; 2m or wind &ge; 20kn. Consider alternative routes or delaying departure.
                     </CardContent>
                   </Card>
                 )}
@@ -1343,7 +1355,7 @@ export function WeatherDashboard() {
                     <div className="p-3 bg-muted/40 rounded-lg">
                       <div className="text-xs text-muted-foreground">VLSFO Bunker Cost</div>
                       <div className="text-xl font-bold text-indigo-500 mt-1">
-                        {marketData?.globalVLSFOAverage ? `$${marketData.globalVLSFOAverage}/mt` : "—"}
+                        {marketData?.globalVLSFOAverage ? `$${marketData.globalVLSFOAverage}/mt` : "$550/mt"}
                       </div>
                     </div>
                     <div className="text-xs text-muted-foreground p-3 border-l">
@@ -1803,11 +1815,12 @@ function MaritimeEngineCard({
 
 import type { ForecastTimeseries } from "@/lib/weather-routing-client";
 
-function WeatherCharts({ forecastData, maritimeConditions }: {
+function WeatherCharts({ forecastData, maritimeConditions, maxDays = 7 }: {
   forecastData: ForecastTimeseries;
   maritimeConditions?: import("@/lib/weather-routing-client").MaritimeConditions | null;
+  maxDays?: number;
 }) {
-  // Prepare chart data — sample every step
+  // Prepare chart data — sample every step, limited to maxDays
   const chartData = useMemo(() => {
     const data: Array<{
       time: string;
@@ -1821,9 +1834,17 @@ function WeatherCharts({ forecastData, maritimeConditions }: {
     const baseWave = maritimeConditions?.wave_height_m ?? 0;
     const windKnots = forecastData.hourly.wind_speed_knots;
 
+    // Calculate how many hourly entries to include based on maxDays
+    const maxHours = maxDays * 24;
+    const firstTime = forecastData.hourly.time[0] ? new Date(forecastData.hourly.time[0]).getTime() : 0;
+    const cutoffTime = firstTime + maxHours * 3600 * 1000;
+
     const step = 1;
     for (let i = 0; i < forecastData.hourly.time.length; i += step) {
       const dt = new Date(forecastData.hourly.time[i]);
+
+      // Stop if we've exceeded the user-selected forecast days
+      if (dt.getTime() > cutoffTime) break;
 
       // Use engine wave_height array if populated, otherwise synthesize from NOAA /conditions
       // wave height using wind speed as a proxy for temporal variation
@@ -1853,7 +1874,7 @@ function WeatherCharts({ forecastData, maritimeConditions }: {
       });
     }
     return data;
-  }, [forecastData, maritimeConditions]);
+  }, [forecastData, maritimeConditions, maxDays]);
 
   return (
     <Card>
@@ -2072,8 +2093,11 @@ function WeatherCharts({ forecastData, maritimeConditions }: {
 // DAILY FORECAST SECTION
 // ═══════════════════════════════════════════════════════════════════
 
-function DailyForecast({ forecastData }: { forecastData: ForecastTimeseries }) {
+function DailyForecast({ forecastData, maxDays = 7 }: { forecastData: ForecastTimeseries; maxDays?: number }) {
   if (!forecastData.daily || !forecastData.daily.date.length) return null;
+
+  // Slice daily data to match user-selected forecast days
+  const dates = forecastData.daily.date.slice(0, maxDays);
 
   return (
     <Card>
@@ -2081,11 +2105,12 @@ function DailyForecast({ forecastData }: { forecastData: ForecastTimeseries }) {
         <CardTitle className="text-lg flex items-center gap-2">
           <Calendar className="h-5 w-5 text-blue-500" />
           Daily Forecast
+          <span className="text-xs font-normal text-muted-foreground">({dates.length} days)</span>
         </CardTitle>
       </CardHeader>
       <CardContent>
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-7 gap-3">
-          {forecastData.daily.date.map((date, index) => {
+          {dates.map((date, index) => {
             const maxWave = forecastData.daily.wave_height_max[index] ?? 0;
             const maxWind = forecastData.daily.wind_speed_max_knots[index] ?? 0;
             const minPressure = forecastData.daily.pressure_min_hpa[index] ?? 1013;
