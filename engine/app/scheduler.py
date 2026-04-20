@@ -2,8 +2,8 @@
 Graph rebuild scheduler — periodically refreshes the ocean graph with fresh data.
 
 Runs as a background thread within the FastAPI process. Every REBUILD_INTERVAL_HOURS,
-it downloads fresh NOAA GRIB data and rebuilds the graph atomically. The old graph
-continues serving requests until the new one is ready.
+it downloads fresh NOAA GRIB + ECMWF Open Data and rebuilds the graph atomically.
+The old graph continues serving requests until the new one is ready.
 
 Also exposes a manual rebuild endpoint for operational triggers (e.g., after
 a sudden weather change or AIS position update).
