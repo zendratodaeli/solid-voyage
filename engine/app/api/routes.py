@@ -140,20 +140,19 @@ async def get_forecast_series(
     lon: float = Query(..., description="Longitude", ge=-180, le=180),
 ):
     """
-    Get 7-day hourly forecast time series for a specific coordinate.
+    Get 10-day forecast time series for a specific coordinate.
 
-    Returns NOAA GFS + WW3 multi-step forecast data including:
-    - Wave height, period, direction, swell, wind waves (WW3 0.25°)
-    - Wind speed/direction (GFS 0.25°)
-    - Barometric pressure (GFS)
-    - Visibility (GFS)
+    Returns ECMWF IFS + WAM forecast data (with NOAA GFS/WW3 fallback) including:
+    - Wave height, period, direction (ECMWF WAM 0.25°)
+    - Wind speed/direction (ECMWF IFS 0.25°)
+    - Barometric pressure (ECMWF IFS)
+    - Sea surface temperature (NOAA RTOFS + OISST)
     - Beaufort scale (derived)
-    - Sea surface temperature (OISST satellite + RTOFS forecast)
     - Weather windows (operationally safe periods)
     - Daily aggregates (max wave, max wind, min pressure)
 
-    This endpoint replaces the Open-Meteo marine API dependency.
-    Every data point traces directly to NOAA.
+    All data from authoritative government sources. ECMWF is primary,
+    NOAA GFS/WW3 serves as fallback when ECMWF is unavailable.
     """
     store = ocean_router.forecast_store
 
@@ -524,9 +523,17 @@ def _get_data_sources_dict() -> dict:
     """Build data sources dict from the router's last download results."""
     dl = getattr(ocean_router, '_last_download', None) or {}
 
+    # Check if ECMWF was blended into the forecast store
+    fs = ocean_router.forecast_store
+    ecmwf_active = (
+        fs is not None
+        and hasattr(fs, 'sources')
+        and fs.sources.get('wind') == 'ECMWF IFS'
+    )
+
     return {
-        "wind": "NOAA GFS" if dl.get("gfs") else "synthetic_climatological",
-        "waves": "NOAA WW3" if dl.get("ww3") else "synthetic_climatological",
+        "wind": "ECMWF IFS" if ecmwf_active else ("NOAA GFS" if dl.get("gfs") else "synthetic_climatological"),
+        "waves": "ECMWF WAM" if ecmwf_active else ("NOAA WW3" if dl.get("ww3") else "synthetic_climatological"),
         "currents": "NOAA RTOFS" if dl.get("rtofs") else "synthetic_climatological",
         "ice": "USNIC" if dl.get("ice") else "synthetic_seasonal",
         "icebergs": f"IIP ({dl['icebergs'].get('iceberg_count', 0)} tracked)" if dl.get("icebergs") else "not_available",
@@ -538,7 +545,19 @@ def _get_data_source_label() -> str:
     dl = getattr(ocean_router, '_last_download', None) or {}
     live_count = sum(1 for k in ["gfs", "ww3", "rtofs"] if dl.get(k))
 
-    if live_count == 3:
+    # Check if ECMWF was blended in
+    fs = ocean_router.forecast_store
+    ecmwf_active = (
+        fs is not None
+        and hasattr(fs, 'sources')
+        and fs.sources.get('wind') == 'ECMWF IFS'
+    )
+
+    if ecmwf_active and live_count >= 1:
+        return "ECMWF+NOAA_live"
+    elif ecmwf_active:
+        return "ECMWF_live"
+    elif live_count == 3:
         return "NOAA_live"
     elif live_count > 0:
         return "NOAA_partial"
