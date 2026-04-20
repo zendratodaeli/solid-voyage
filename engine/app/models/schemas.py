@@ -52,6 +52,7 @@ class HealthResponse(BaseModel):
     graph_edges: int = 0
     graph_timestamp: Optional[str] = None
     data_sources: dict = Field(default_factory=dict)
+    scheduler: Optional[dict] = None
 
 
 class GraphInfoResponse(BaseModel):

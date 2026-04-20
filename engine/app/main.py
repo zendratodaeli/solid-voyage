@@ -8,8 +8,9 @@ wave, current, and ice conditions, and uses A* search to find fuel-efficient rou
 Features:
 - 180K+ ocean node graph with 8-directional edges
 - A* pathfinding with haversine heuristic (sub-1s queries)
+- ECMWF IFS+WAM + NOAA GFS/WW3 blended forecasts (10-day)
+- Smart polling scheduler (30-min cycle detection — enterprise grade)
 - Seasonal ice layer (Arctic, Antarctic, Baltic)
-- Background graph rebuild scheduler (every 6 hours)
 - Atomic graph swap (zero-downtime rebuilds)
 
 Usage:
@@ -39,6 +40,19 @@ def _build_graph_background():
         router_instance = get_ocean_router()
         router_instance.build()
         logger.info("🎉 Ocean graph is ready to serve routes!")
+
+        # Seed the smart scheduler with the current cycle markers
+        # so it doesn't trigger a redundant rebuild on the first poll
+        scheduler = get_scheduler()
+        if router_instance.forecast_store:
+            fs = router_instance.forecast_store
+            gfs_cycle = f"{fs.cycle_date}/{fs.cycle_run}" if fs.cycle_date else ""
+            ecmwf_cycle = ""
+            if hasattr(fs, 'sources') and fs.sources.get('wind') == 'ECMWF IFS':
+                # ECMWF was blended — use its cycle info
+                ecmwf_cycle = gfs_cycle  # Same rebuild cycle
+            scheduler.set_initial_cycles(gfs_cycle=gfs_cycle, ecmwf_cycle=ecmwf_cycle)
+
     except Exception as e:
         logger.error(f"❌ Background graph build failed: {e}")
 
@@ -58,7 +72,7 @@ async def lifespan(app: FastAPI):
     build_thread = threading.Thread(target=_build_graph_background, daemon=True)
     build_thread.start()
 
-    # Start the periodic rebuild scheduler
+    # Start the smart polling scheduler (checks every 30min for new NWP data)
     scheduler = get_scheduler()
     scheduler.start()
 
@@ -77,7 +91,7 @@ app = FastAPI(
         "Provides fuel-efficient routes by accounting for ocean currents, wind, "
         "wave conditions, and seasonal ice coverage."
     ),
-    version="0.2.0",
+    version="1.1.0",
     lifespan=lifespan,
 )
 

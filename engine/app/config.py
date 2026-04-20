@@ -67,6 +67,8 @@ ECMWF_DIR = os.path.join(DATA_DIR, "ecmwf")   # ECMWF GRIB storage
 LAND_MASK_PATH = os.path.join(DATA_DIR, "land_mask.npy")
 
 # --- Graph Rebuild ---
+# Smart polling: checks every 30 min for new NWP cycles (see scheduler.py)
+# Legacy fallback interval (only used if SmartScheduler is disabled)
 REBUILD_INTERVAL_HOURS = int(os.getenv("REBUILD_INTERVAL_HOURS", "6"))
 
 # --- API ---

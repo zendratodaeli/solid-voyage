@@ -15,7 +15,7 @@ from app.models.schemas import (
     Waypoint,
 )
 from app.graph.pathfinder import OceanRouter
-from app.scheduler import GraphScheduler
+from app.scheduler import SmartScheduler
 from app.config import SOLAS_DISCLAIMER, GRID_RESOLUTION, LAT_MIN, LAT_MAX, LON_MIN, LON_MAX
 
 logger = logging.getLogger(__name__)
@@ -24,7 +24,7 @@ router = APIRouter()
 
 # Singleton instances — shared across all requests
 ocean_router = OceanRouter()
-graph_scheduler = GraphScheduler(ocean_router)
+graph_scheduler = SmartScheduler(ocean_router)
 
 
 def get_ocean_router() -> OceanRouter:
@@ -32,8 +32,8 @@ def get_ocean_router() -> OceanRouter:
     return ocean_router
 
 
-def get_scheduler() -> GraphScheduler:
-    """Get the global scheduler instance."""
+def get_scheduler() -> SmartScheduler:
+    """Get the global smart polling scheduler instance."""
     return graph_scheduler
 
 
@@ -119,8 +119,9 @@ async def get_conditions(
 async def health_check():
     """
     Health check endpoint for monitoring and load balancer probes.
+    Includes smart scheduler status (polling state, cycles, rebuild counts).
     """
-    return HealthResponse(
+    health = HealthResponse(
         status="ok" if ocean_router.is_ready else "building",
         graph_loaded=ocean_router.graph is not None,
         graph_nodes=ocean_router.graph.number_of_nodes() if ocean_router.graph else 0,
@@ -128,6 +129,9 @@ async def health_check():
         graph_timestamp=ocean_router.build_timestamp,
         data_sources=_get_data_sources_dict(),
     )
+    # Attach scheduler status as extra field
+    health.scheduler = graph_scheduler.status
+    return health
 
 
 @router.get("/forecast-series")
