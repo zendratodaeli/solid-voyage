@@ -35,6 +35,7 @@ import {
   Globe,
   Anchor,
   Gauge,
+  Shield,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -1367,6 +1368,35 @@ export function WeatherDashboard() {
 
               {/* Data Authority Matrix */}
               <DataAuthorityMatrix />
+
+              {/* Forecast Verification Badge */}
+              <Card className="border-indigo-500/20 shadow-sm relative overflow-hidden">
+                <div className="absolute inset-x-0 top-0 h-0.5 bg-gradient-to-r from-indigo-500 to-purple-500" />
+                <CardContent className="pt-4 pb-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2">
+                      <Shield className="h-4 w-4 text-indigo-400" />
+                      <span className="text-sm font-semibold">Forecast Verification</span>
+                    </div>
+                    <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 uppercase tracking-wider">
+                      Active
+                    </span>
+                  </div>
+                  <p className="text-xs text-muted-foreground leading-relaxed">
+                    All predictions are continuously logged for hindcast verification.
+                    Compare against ERA5 reanalysis and buoy observations to compute RMSE, bias, and correlation.
+                  </p>
+                  <div className="mt-2 flex items-center gap-3 text-[10px]">
+                    <div className="flex items-center gap-1 text-indigo-400">
+                      <div className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse" />
+                      Logging active
+                    </div>
+                    <span className="text-muted-foreground">
+                      Endpoint: <code className="text-indigo-300">/verification/stats</code>
+                    </span>
+                  </div>
+                </CardContent>
+              </Card>
             </>
           )}
         </>

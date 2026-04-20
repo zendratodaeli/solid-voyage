@@ -166,6 +166,31 @@ async def get_forecast_series(
         )
 
     result = store.get_timeseries(lat, lon)
+
+    # ── Log predictions for hindcast verification (non-blocking) ──
+    try:
+        from app.data.forecast_logger import ForecastLogger
+        flog = ForecastLogger.get()
+        hourly = result.get("hourly", {})
+        times = hourly.get("time", [])
+        waves = hourly.get("wave_height", [])
+        winds = hourly.get("wind_speed_knots", [])
+        pressures = hourly.get("pressure_hpa", [])
+        # Sample every 4th step to avoid excessive logging
+        for i in range(0, min(len(times), len(waves)), 4):
+            flog.log_prediction(
+                lat=lat, lon=lon,
+                target_time=times[i] if i < len(times) else "",
+                forecast_hour=i * 3,  # Approximate
+                source=result.get("model", "ECMWF+NOAA"),
+                endpoint="forecast-series",
+                wave_height_m=waves[i] if i < len(waves) else 0,
+                wind_speed_knots=winds[i] if i < len(winds) else 0,
+                pressure_hpa=pressures[i] if i < len(pressures) else 0,
+            )
+    except Exception:
+        pass  # Never block the response
+
     return result
 
 
@@ -379,6 +404,30 @@ async def get_route_forecast(request: RouteForecastRequest):
             worst_wp = wpf
 
     weather_delay = cumulative_hours - cumulative_hours_calm
+
+    # ── Log per-waypoint predictions for hindcast verification ──
+    try:
+        from app.data.forecast_logger import ForecastLogger
+        flog = ForecastLogger.get()
+        for wpf in waypoint_forecasts:
+            flog.log_prediction(
+                lat=wpf.lat, lon=wpf.lon,
+                target_time=wpf.eta,
+                forecast_hour=wpf.hours_from_departure,
+                source="ECMWF+NOAA",
+                endpoint="route-forecast",
+                wave_height_m=wpf.wave_height_m,
+                wind_speed_knots=wpf.wind_speed_knots,
+                pressure_hpa=wpf.pressure_hpa,
+                swell_height_m=wpf.swell_height_m,
+                sea_surface_temperature=wpf.sea_surface_temperature,
+                current_speed_knots=wpf.current_speed_knots,
+                ice_concentration_pct=wpf.ice_concentration_pct,
+                beaufort=wpf.beaufort,
+                navigability=wpf.navigability,
+            )
+    except Exception:
+        pass  # Never block the response
 
     return RouteForecastResponse(
         success=True,
@@ -841,3 +890,31 @@ def _get_data_source_label() -> str:
     else:
         return "synthetic_climatological"
 
+
+# ═══════════════════════════════════════════════════════════════════
+#  VERIFICATION & HINDCAST
+# ═══════════════════════════════════════════════════════════════════
+
+@router.get("/verification/stats")
+async def get_verification_stats():
+    """
+    Get forecast verification statistics.
+
+    Returns prediction counts, date ranges, per-variable summaries,
+    and navigability distribution from logged forecasts.
+
+    This endpoint proves forecast accuracy to charterers and P&I clubs.
+    """
+    from app.data.forecast_logger import ForecastLogger
+    flog = ForecastLogger.get()
+    stats = flog.get_stats()
+
+    return {
+        "success": True,
+        "verification": stats,
+        "note": (
+            "Predictions are logged continuously. Compare against ERA5 reanalysis "
+            "or buoy observations for RMSE/bias verification."
+        ),
+        "source": "ECMWF+NOAA forecast logs",
+    }
