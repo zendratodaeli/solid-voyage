@@ -362,8 +362,17 @@ class ForecastStore:
         pressures: list,
     ) -> dict:
         """Aggregate hourly data into daily max/min summaries."""
-        steps_per_day = 8  # 24h / 3h = 8 steps per day
-        n_days = min(7, len(self.timestamps) // steps_per_day)
+        # Dynamically detect step interval from timestamps
+        # ECMWF uses 6h steps (4/day), GFS uses 3h steps (8/day)
+        if len(self.timestamps) >= 2:
+            dt0 = datetime.fromisoformat(self.timestamps[0].replace("Z", "+00:00"))
+            dt1 = datetime.fromisoformat(self.timestamps[1].replace("Z", "+00:00"))
+            step_hours = max(1, int((dt1 - dt0).total_seconds() / 3600))
+        else:
+            step_hours = 6  # Default to 6h if we can't detect
+
+        steps_per_day = 24 // step_hours  # 4 for 6h, 8 for 3h
+        n_days = min(10, len(self.timestamps) // steps_per_day)
 
         dates = []
         wave_max = []

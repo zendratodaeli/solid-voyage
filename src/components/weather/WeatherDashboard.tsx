@@ -604,7 +604,7 @@ export function WeatherDashboard() {
           Marine Weather Intelligence
         </h1>
         <p className="text-muted-foreground text-sm mt-1">
-          High-fidelity maritime weather powered by the NOAA Forecast Pipeline
+          High-fidelity maritime weather powered by ECMWF + NOAA
         </p>
       </div>
 
@@ -1514,13 +1514,13 @@ function MaritimeEngineCard({
           )}
         </div>
         <p className="text-xs text-muted-foreground">
-          NOAA-sourced wind, currents, ice &amp; navigability — the authoritative source for voyage planning decisions
+          ECMWF + NOAA wind, waves, currents, ice &amp; navigability — the authoritative source for voyage planning decisions
         </p>
         {/* Data Sources Badges */}
         {health?.data_sources && (
           <div className="flex flex-wrap gap-1.5 mt-2">
             {Object.entries(health.data_sources).map(([key, value]) => {
-              const isLive = typeof value === 'string' && (value.startsWith('NOAA') || value.startsWith('USNIC') || value.startsWith('IIP'));
+              const isLive = typeof value === 'string' && (value.startsWith('ECMWF') || value.startsWith('NOAA') || value.startsWith('USNIC') || value.startsWith('IIP'));
               return (
                 <span
                   key={key}
@@ -1590,9 +1590,9 @@ function MaritimeEngineCard({
               </div>
             )}
 
-            {/* Row 2: NOAA Source Data — 3 columns */}
+            {/* Row 2: ECMWF/NOAA Source Data — 3 columns */}
             <div className="grid grid-cols-3 gap-4">
-              {/* Wave Height (NOAA WW3) — with forecast timestamp */}
+              {/* Wave Height (ECMWF WAM) — with forecast timestamp */}
               <Tooltip>
                 <TooltipTrigger asChild>
                   <div className="p-4 rounded-xl bg-muted/40 border border-border/50 hover:border-border transition-colors cursor-default">
@@ -1600,7 +1600,7 @@ function MaritimeEngineCard({
                       <div className="p-1.5 rounded-lg" style={{ backgroundColor: "#3b82f615" }}>
                         <Waves className="h-4 w-4" style={{ color: "#3b82f6" }} />
                       </div>
-                      <span className="text-xs text-muted-foreground">Waves (WW3)</span>
+                      <span className="text-xs text-muted-foreground">Waves (ECMWF)</span>
                     </div>
                     <div className="text-2xl font-bold">{conditions.wave_height_m} m</div>
                     <div className="text-[10px] text-muted-foreground mt-1">
@@ -1614,17 +1614,17 @@ function MaritimeEngineCard({
                   </div>
                 </TooltipTrigger>
                 <TooltipContent side="top" className="max-w-[280px] text-xs leading-relaxed">
-                  NOAA WaveWatch III forecast — the IMO/P&amp;I industry standard for significant wave height. This is a forecast value updated every 6 hours from the latest NOAA GFS/WW3 cycle.
+                  ECMWF WAM (Wave Model) — the world&apos;s leading wave forecast model. 0.25° resolution, updated every 30 minutes from the latest ECMWF HRES cycle. NOAA WW3 serves as fallback.
                 </TooltipContent>
               </Tooltip>
-              {/* Wind (NOAA GFS) */}
+              {/* Wind (ECMWF IFS) */}
               <MetricCard
                 icon={Wind}
-                label="Wind (GFS)"
+                label="Wind (ECMWF)"
                 value={`${conditions.wind_speed_knots} kn`}
                 subtext={`${degreesToCompass(conditions.wind_direction_deg)} (${conditions.wind_direction_deg}°)`}
                 color="#6366f1"
-                tooltip="NOAA Global Forecast System wind at 10m height. Gold standard for open-ocean wind — 0.25° resolution, updated every 6 hours."
+                tooltip="ECMWF IFS (Integrated Forecast System) wind at 10m height. #1 ranked global NWP model — 0.25° resolution, updated every 30 minutes."
               />
               {/* Ocean Current (NOAA RTOFS) */}
               <MetricCard
@@ -2136,24 +2136,26 @@ function DailyForecast({ forecastData }: { forecastData: ForecastTimeseries }) {
 const DATA_AUTHORITY_ROWS: Array<{
   metric: string;
   source: string;
-  sourceType: "noaa" | "engine";
+  sourceType: "ecmwf" | "noaa" | "engine";
   reason: string;
 }> = [
-  { metric: "Wave Height", source: "NOAA WW3", sourceType: "noaa", reason: "IMO/P&I industry standard" },
-  { metric: "Swell Height / Period", source: "NOAA WW3", sourceType: "noaa", reason: "Partitioned swell parameters" },
-  { metric: "Wave Direction", source: "NOAA WW3", sourceType: "noaa", reason: "Multi-parameter directional spectrum" },
-  { metric: "Sea Surface Temp", source: "NOAA GFS/OISST", sourceType: "noaa", reason: "Dynamically assimilated SST model" },
+  { metric: "Wave Height", source: "ECMWF WAM", sourceType: "ecmwf", reason: "#1 global wave model — 0.25° resolution" },
+  { metric: "Swell Height / Period", source: "ECMWF WAM", sourceType: "ecmwf", reason: "Combined significant wave height (SWH)" },
+  { metric: "Wave Direction", source: "ECMWF WAM", sourceType: "ecmwf", reason: "Mean wave direction from HRES" },
+  { metric: "Wind Speed / Direction", source: "ECMWF IFS", sourceType: "ecmwf", reason: "#1 ranked NWP model — 0.25° global" },
+  { metric: "Pressure (MSLP)", source: "ECMWF IFS", sourceType: "ecmwf", reason: "Mean sea level pressure — HRES" },
+  { metric: "Sea Surface Temp", source: "NOAA RTOFS/OISST", sourceType: "noaa", reason: "Dynamically assimilated SST model" },
   { metric: "Ocean Current", source: "NOAA RTOFS", sourceType: "noaa", reason: "Thermohaline circulation — Gulf Stream, Kuroshio" },
-  { metric: "Wind Speed / Direction", source: "NOAA GFS", sourceType: "noaa", reason: "Gold standard — 0.25° global" },
   { metric: "Ice Concentration", source: "USNIC", sourceType: "noaa", reason: "Primary government mandate" },
   { metric: "Ice Severity", source: "USNIC", sourceType: "noaa", reason: "WMO egg-code classification" },
   { metric: "Icebergs", source: "IIP (USCG)", sourceType: "noaa", reason: "Mandated by SOLAS Ch. V" },
-  { metric: "Navigability", source: "Engine", sourceType: "engine", reason: "Computed from NOAA + USNIC + IIP" },
+  { metric: "Navigability", source: "Engine", sourceType: "engine", reason: "Computed from ECMWF + NOAA + USNIC + IIP" },
   { metric: "Effective Speed", source: "Engine", sourceType: "engine", reason: "Physics-based wave/wind/current penalty" },
   { metric: "Route Optimization", source: "Engine", sourceType: "engine", reason: "A* on weather-weighted ocean graph" },
 ];
 
 const SOURCE_BADGE_STYLES = {
+  ecmwf: "bg-blue-500/10 text-blue-400 border-blue-500/20",
   noaa: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20",
   engine: "bg-violet-500/10 text-violet-400 border-violet-500/20",
 };
@@ -2212,6 +2214,10 @@ function DataAuthorityMatrix() {
 
         {/* Legend */}
         <div className="flex items-center gap-4 mt-3 pt-3 border-t border-border/50">
+          <div className="flex items-center gap-1.5">
+            <span className="w-2 h-2 rounded-full bg-blue-500" />
+            <span className="text-[10px] text-muted-foreground">ECMWF (Primary)</span>
+          </div>
           <div className="flex items-center gap-1.5">
             <span className="w-2 h-2 rounded-full bg-emerald-500" />
             <span className="text-[10px] text-muted-foreground">NOAA / Government</span>
