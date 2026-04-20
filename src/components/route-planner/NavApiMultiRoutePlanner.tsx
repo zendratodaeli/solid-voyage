@@ -94,7 +94,7 @@ import { majorPorts } from "@/data/ports";
 import { getLastPosition, type AisVesselPosition } from "@/actions/ais-actions";
 import { computeRouteIntelligence, type RouteIntelligenceResult } from "@/lib/calculations/route-intelligence";
 import { analyzeWeatherDeviation, checkBunkeringRange, analyzeNearestSafePorts, type SafePortResult } from "@/lib/calculations/route-deviation-engine";
-import { fetchWeatherRoute, weatherWaypointsToCoordinates, fetchRouteForecast, type WeatherRouteResponse, type RouteForecastResponse } from "@/lib/weather-routing-client";
+import { fetchWeatherRoute, weatherWaypointsToCoordinates, fetchRouteForecast, fetchMultiRouteForecast, type WeatherRouteResponse, type RouteForecastResponse, type MultiRouteComparisonResponse } from "@/lib/weather-routing-client";
 import { AIRouteRecommendationPanel } from "./AIRouteRecommendation";
 import type { AIRouteRecommendation } from "@/app/api/ai/route-analysis/route";
 
@@ -326,6 +326,10 @@ export function NavApiMultiRoutePlanner({
 
   // Nearest Safe Port Analysis state
   const [safePortAnalysis, setSafePortAnalysis] = useState<SafePortResult | null>(null);
+
+  // Multi-route weather comparison state
+  const [multiRouteComparison, setMultiRouteComparison] = useState<MultiRouteComparisonResponse | null>(null);
+  const [isMultiRouteLoading, setIsMultiRouteLoading] = useState(false);
 
   // Panel state — cockpit layout
   const [panelOpen, setPanelOpen] = useState(true);
@@ -827,10 +831,95 @@ export function NavApiMultiRoutePlanner({
     })();
   }, [searchParams]);
 
+  // ── Voyage Form Deep-Dive: Pre-fill from VoyageForm sessionStorage ──
+  const voyageFormProcessed = useRef(false);
+  useEffect(() => {
+    if (voyageFormProcessed.current) return;
+    const fromParam = searchParams.get("from");
+    if (fromParam !== "voyage-form") return;
+
+    try {
+      const raw = sessionStorage.getItem("voyage-form-to-route-planner");
+      if (!raw) return;
+      voyageFormProcessed.current = true;
+
+      const data = JSON.parse(raw);
+      sessionStorage.removeItem("voyage-form-to-route-planner"); // Clean up
+
+      // Auto-select vessel
+      if (data.vesselId && vessels.length > 0) {
+        const vessel = vessels.find((v: any) => v.id === data.vesselId);
+        if (vessel) {
+          setSelectedVesselId(vessel.id);
+        }
+      }
+
+      // Build waypoints: Open → LoadPorts → DischargePorts
+      const allPorts: string[] = [];
+      if (data.openPort) allPorts.push(data.openPort);
+      if (data.loadPorts) allPorts.push(...data.loadPorts);
+      if (data.dischargePorts) allPorts.push(...data.dischargePorts);
+
+      if (allPorts.length >= 2) {
+        const newWaypoints = allPorts.map((portName: string, idx: number) => ({
+          id: `vf-${idx}-${Date.now()}`,
+          type: "port" as const,
+          port: null,
+          passage: null,
+          manualName: portName,
+          useManualCoords: false,
+          legConfig: idx > 0 ? {
+            condition: (idx === 1 ? "ballast" : "laden") as "ballast" | "laden",
+            speed: idx === 1
+              ? parseFloat(data.ballastSpeed) || 14
+              : parseFloat(data.ladenSpeed) || 12,
+            dailyConsumption: 25,
+            maxDraft: data.draft?.toString() || "",
+          } : undefined,
+          portTimes: idx > 0 ? {
+            waitingHours: 0,
+            loadingHours: 0,
+            idleHours: 0,
+          } : undefined,
+        }));
+
+        // Apply port times from voyage form
+        if (data.portTimes) {
+          const loadIdx = data.openPort ? 1 : 0; // Offset if there's an open port
+          data.portTimes.load?.forEach((pt: any, i: number) => {
+            const wpIdx = loadIdx + i;
+            if (newWaypoints[wpIdx]?.portTimes) {
+              newWaypoints[wpIdx].portTimes!.waitingHours = (pt.waiting || 0) * 24;
+              newWaypoints[wpIdx].portTimes!.loadingHours = (pt.berthing || 0) * 24;
+            }
+          });
+          data.portTimes.discharge?.forEach((pt: any, i: number) => {
+            const wpIdx = loadIdx + (data.loadPorts?.length || 0) + i;
+            if (newWaypoints[wpIdx]?.portTimes) {
+              newWaypoints[wpIdx].portTimes!.waitingHours = (pt.waiting || 0) * 24;
+              newWaypoints[wpIdx].portTimes!.loadingHours = (pt.berthing || 0) * 24;
+            }
+          });
+        }
+
+        setWaypoints(newWaypoints as any);
+
+        // Set ETD if provided
+        if (data.etd) {
+          setEtd(data.etd);
+        }
+
+        toast.info("Pre-filled from Voyage Form — review and calculate", { duration: 4000 });
+      }
+    } catch (e) {
+      console.warn("[RoutePlanner] Failed to read voyage form data:", e);
+    }
+  }, [searchParams, vessels]);
+
   // Check if we can calculate (at least 2 valid waypoints)
   const validWaypoints = useMemo(
     () => waypoints.filter((w) => 
-      w.port || w.passage || (w.manualLat !== undefined && w.manualLng !== undefined)
+      w.port || w.passage || (w.manualLat !== undefined && w.manualLng !== undefined) || w.manualName
     ),
     [waypoints]
   );
@@ -2441,6 +2530,54 @@ export function NavApiMultiRoutePlanner({
       // Update alternatives with intelligence data
       setRouteAlternatives(enrichedAlts);
 
+      // ── Step 1b: Multi-Route Weather Comparison ──
+      // Fire weather comparison across all alternatives (non-blocking)
+      if (enrichedAlts.length >= 1) {
+        setIsMultiRouteLoading(true);
+        const etdISO = etd ? new Date(etd).toISOString() : new Date().toISOString();
+        
+        const routeInputs = enrichedAlts.map(alt => {
+          // Sample up to 12 waypoints per route
+          const allCoords = alt.result.legs.flatMap(leg => leg.geometry.coordinates);
+          const step = Math.max(1, Math.floor(allCoords.length / 12));
+          const sampled: Array<{ lat: number; lon: number }> = [];
+          for (let i = 0; i < allCoords.length; i += step) {
+            sampled.push({ lat: allCoords[i][1], lon: allCoords[i][0] });
+          }
+          // Always include last point
+          const last = allCoords[allCoords.length - 1];
+          if (sampled.length === 0 || sampled[sampled.length - 1].lat !== last[1]) {
+            sampled.push({ lat: last[1], lon: last[0] });
+          }
+          return {
+            route_id: alt.id,
+            label: alt.label,
+            waypoints: sampled,
+            total_distance_nm: alt.totalDistanceNm,
+          };
+        });
+
+        fetchMultiRouteForecast({
+          routes: routeInputs,
+          etd: etdISO,
+          vessel_speed_knots: effectiveSpeed || 12.5,
+          vessel_type: selectedVessel?.vesselType || "BULK_CARRIER",
+          vessel_dwt: effectiveDWT || 50000,
+        }).then(result => {
+          if (result?.success) {
+            setMultiRouteComparison(result);
+            console.log(
+              `[MultiRoute] ✅ ${result.routes.length} routes compared, ` +
+              `recommended: ${result.recommended_route_id}`
+            );
+          }
+        }).catch(err => {
+          console.warn("[MultiRoute] Engine offline:", err);
+        }).finally(() => {
+          setIsMultiRouteLoading(false);
+        });
+      }
+
       // Step 2: Fire AI analysis if we have 2+ routes
       if (enrichedAlts.length >= 1) {
         setIsAiLoading(true);
@@ -3459,6 +3596,111 @@ export function NavApiMultiRoutePlanner({
                   </div>
                 )}
                 </>
+              )}
+
+              {/* ── Multi-Route Weather Comparison ── */}
+              {(multiRouteComparison || isMultiRouteLoading) && result && (
+                <div className="mx-2 mb-2">
+                  <div className="px-3 py-2 rounded-lg border border-border/50 bg-card/50">
+                    <div className="flex items-center gap-1.5 mb-2">
+                      <CloudSun className="h-3.5 w-3.5 text-blue-400" />
+                      <span className="text-[10px] font-semibold uppercase tracking-wider text-blue-400">
+                        Weather Comparison (ECMWF+NOAA)
+                      </span>
+                      {isMultiRouteLoading && <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />}
+                    </div>
+                    
+                    {multiRouteComparison && multiRouteComparison.routes.length > 0 && (
+                      <>
+                        {/* Comparison Table */}
+                        <div className="overflow-x-auto -mx-1">
+                          <table className="w-full text-[10px]">
+                            <thead>
+                              <tr className="border-b border-border/30">
+                                <th className="text-left py-1 px-1 font-medium text-muted-foreground">Route</th>
+                                <th className="text-right py-1 px-1 font-medium text-muted-foreground">Delay</th>
+                                <th className="text-right py-1 px-1 font-medium text-muted-foreground">Max Wave</th>
+                                <th className="text-right py-1 px-1 font-medium text-muted-foreground">Fuel</th>
+                                <th className="text-right py-1 px-1 font-medium text-muted-foreground">CO₂</th>
+                                <th className="text-center py-1 px-1 font-medium text-muted-foreground">Risk</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {multiRouteComparison.routes.map((route) => {
+                                const isRecommended = route.route_id === multiRouteComparison.recommended_route_id;
+                                const riskColors: Record<string, string> = {
+                                  low: "text-emerald-400 bg-emerald-400/10",
+                                  moderate: "text-amber-400 bg-amber-400/10",
+                                  high: "text-orange-400 bg-orange-400/10",
+                                  extreme: "text-red-400 bg-red-400/10",
+                                };
+                                return (
+                                  <tr 
+                                    key={route.route_id}
+                                    className={cn(
+                                      "border-b border-border/20",
+                                      isRecommended && "bg-blue-500/5"
+                                    )}
+                                  >
+                                    <td className="py-1.5 px-1">
+                                      <div className="flex items-center gap-1">
+                                        {isRecommended && (
+                                          <span className="text-[8px] px-1 py-0.5 rounded bg-blue-500/20 text-blue-400 font-bold shrink-0">★</span>
+                                        )}
+                                        <span className={cn("truncate max-w-[100px]", isRecommended && "font-semibold text-blue-400")}>
+                                          {route.label}
+                                        </span>
+                                      </div>
+                                    </td>
+                                    <td className={cn("text-right py-1.5 px-1 font-mono", route.weather_delay_hours > 3 ? "text-amber-400" : "text-emerald-400")}>
+                                      +{route.weather_delay_hours}h
+                                    </td>
+                                    <td className={cn("text-right py-1.5 px-1 font-mono", route.max_wave_height_m >= 4 ? "text-orange-400" : "")}>
+                                      {route.max_wave_height_m}m
+                                    </td>
+                                    <td className="text-right py-1.5 px-1 font-mono">
+                                      {route.fuel_estimate_mt}
+                                    </td>
+                                    <td className="text-right py-1.5 px-1 font-mono text-muted-foreground">
+                                      {route.co2_estimate_mt}
+                                    </td>
+                                    <td className="text-center py-1.5 px-1">
+                                      <span className={cn("text-[9px] px-1.5 py-0.5 rounded-full font-medium", riskColors[route.risk_level] || "")}>
+                                        {route.risk_level}
+                                      </span>
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+
+                        {/* Recommendation */}
+                        {multiRouteComparison.recommendation_reason && (
+                          <div className="mt-2 px-2 py-1.5 rounded-md bg-blue-500/10 border border-blue-500/20">
+                            <div className="flex items-start gap-1.5">
+                              <Zap className="h-3 w-3 text-blue-400 mt-0.5 shrink-0" />
+                              <p className="text-[10px] text-blue-300/90 leading-relaxed">
+                                {multiRouteComparison.recommendation_reason}
+                              </p>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Source badge */}
+                        <div className="flex items-center justify-between mt-1.5">
+                          <span className="text-[9px] text-muted-foreground/50">
+                            {multiRouteComparison.routes[0]?.waypoint_count || 0} waypoints/route
+                          </span>
+                          <span className="text-[9px] text-blue-400/50 font-mono">
+                            {multiRouteComparison.source}
+                          </span>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </div>
               )}
 
               {/* ── Drawer Button Bar ── */}

@@ -202,3 +202,54 @@ class RouteForecastResponse(BaseModel):
     error: Optional[str] = None
 
 
+# ═══════════════════════════════════════════════════════════════════
+# MULTI-ROUTE COMPARISON
+# ═══════════════════════════════════════════════════════════════════
+
+class SingleRouteInput(BaseModel):
+    """One route alternative for multi-route comparison."""
+    route_id: str                    # "primary" | "avoid-canal" | "seca-minimized" | "weather-avoidance"
+    label: str                       # "Via Suez Canal"
+    waypoints: list[Waypoint]        # Sampled coordinates along the route
+    total_distance_nm: float = 0.0   # Pre-computed from NavAPI
+
+class MultiRouteForecastRequest(BaseModel):
+    """Request body for comparing weather across multiple route alternatives."""
+    routes: list[SingleRouteInput]
+    etd: str                         # ISO 8601 departure time
+    vessel_speed_knots: float = 12.5
+    vessel_type: str = "BULK_CARRIER"
+    vessel_dwt: float = 50000
+    vessel_loa: Optional[float] = None
+    vessel_beam: Optional[float] = None
+
+class RouteWeatherSummary(BaseModel):
+    """Weather impact summary for a single route alternative."""
+    route_id: str
+    label: str
+    total_distance_nm: float = 0.0
+    total_hours_calm: float = 0.0
+    total_hours_weather: float = 0.0
+    weather_delay_hours: float = 0.0
+    avg_wave_height_m: float = 0.0
+    max_wave_height_m: float = 0.0
+    avg_wind_speed_knots: float = 0.0
+    max_wind_speed_knots: float = 0.0
+    max_beaufort: int = 0
+    avg_current_speed_knots: float = 0.0
+    max_ice_concentration_pct: float = 0.0
+    fuel_estimate_mt: float = 0.0
+    co2_estimate_mt: float = 0.0
+    risk_level: str = "low"          # low | moderate | high | extreme
+    worst_advisory: str = ""
+    navigability_summary: str = ""   # "Open (10/12 waypoints), Moderate (2/12)"
+    waypoint_count: int = 0
+
+class MultiRouteComparisonResponse(BaseModel):
+    """Response body comparing weather impact across route alternatives."""
+    success: bool = True
+    routes: list[RouteWeatherSummary] = Field(default_factory=list)
+    recommended_route_id: str = ""
+    recommendation_reason: str = ""
+    source: str = "ECMWF+NOAA"
+    cycle: Optional[str] = None

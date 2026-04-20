@@ -13,6 +13,9 @@ from app.models.schemas import (
     RouteForecastResponse,
     WaypointForecast,
     Waypoint,
+    MultiRouteForecastRequest,
+    MultiRouteComparisonResponse,
+    RouteWeatherSummary,
 )
 from app.graph.pathfinder import OceanRouter
 from app.scheduler import SmartScheduler
@@ -390,6 +393,229 @@ async def get_route_forecast(request: RouteForecastRequest):
         cycle=store.cycle_timestamp.isoformat() if store.cycle_timestamp else None,
     )
 
+
+@router.post("/multi-route-forecast", response_model=MultiRouteComparisonResponse)
+async def compare_route_weather(request: MultiRouteForecastRequest):
+    """
+    Compare weather impact across multiple route alternatives.
+
+    For each route:
+    1. Walks waypoints computing ETA at each point
+    2. Extracts ECMWF+NOAA weather at vessel ETA
+    3. Computes delay, fuel, CO2, risk level
+    4. Returns comparison table + recommended route
+
+    This is what separates Solid Voyage from basic routing tools.
+    """
+    from datetime import datetime, timezone, timedelta
+    import math
+    from app.models.speed_curves import get_speed_curve
+    from app.graph.cost import haversine_nm
+
+    store = ocean_router.forecast_store
+    if store is None or not store.is_ready:
+        raise HTTPException(
+            status_code=503,
+            detail="Forecast store not ready. Data is being downloaded — please retry in 60 seconds."
+        )
+
+    # Parse ETD
+    try:
+        etd = datetime.fromisoformat(request.etd.replace("Z", "+00:00"))
+        if etd.tzinfo is None:
+            etd = etd.replace(tzinfo=timezone.utc)
+    except Exception:
+        raise HTTPException(status_code=400, detail=f"Invalid ETD format: {request.etd}")
+
+    speed_curve = get_speed_curve(
+        vessel_type=request.vessel_type,
+        dwt=request.vessel_dwt,
+        loa=request.vessel_loa,
+        beam=request.vessel_beam,
+    )
+    base_speed = request.vessel_speed_knots
+    daily_consumption = 25.0  # Default MT/day — can be parameterized later
+
+    route_summaries: list[RouteWeatherSummary] = []
+
+    for route_input in request.routes:
+        wps = route_input.waypoints
+        if len(wps) < 2:
+            continue
+
+        cumulative_hours = 0.0
+        cumulative_hours_calm = 0.0
+        cumulative_distance_nm = 0.0
+        wave_heights = []
+        wind_speeds = []
+        current_speeds = []
+        beaufort_values = []
+        ice_values = []
+        navigability_counts: dict[str, int] = {}
+        worst_advisory = "Clear conditions"
+        worst_wave = 0.0
+
+        for i, wp in enumerate(wps):
+            if i > 0:
+                prev = wps[i - 1]
+                leg_nm = haversine_nm(prev.lat, prev.lon, wp.lat, wp.lon)
+                calm_hours = leg_nm / base_speed if base_speed > 0 else 0
+                cumulative_hours_calm += calm_hours
+
+                # Use previous point's weather for speed penalty
+                if wave_heights:
+                    prev_wave = wave_heights[-1]
+                    eff_spd = speed_curve.effective_speed(
+                        base_speed, prev_wave, 0, 0, wind_speeds[-1] if wind_speeds else 0
+                    )
+                else:
+                    eff_spd = base_speed
+
+                leg_hours = leg_nm / eff_spd if eff_spd > 0 else 0
+                cumulative_hours += leg_hours
+                cumulative_distance_nm += leg_nm
+
+            # ETA at this waypoint
+            eta = etd + timedelta(hours=cumulative_hours)
+            wx = store.get_at_time(wp.lat, wp.lon, eta)
+            if "error" in wx:
+                continue
+
+            wave_h = wx.get("wave_height_m", 0)
+            wind_kn = wx.get("wind_speed_knots", 0)
+            bf = wx.get("beaufort", 0)
+
+            wave_heights.append(wave_h)
+            wind_speeds.append(wind_kn)
+            beaufort_values.append(bf)
+
+            # Extract currents
+            cur_speed = 0.0
+            weather_data = getattr(ocean_router, '_weather_data', None)
+            if weather_data is not None:
+                from app.data.land_mask import lat_to_index, lon_to_index
+                ci, cj = lat_to_index(wp.lat), lon_to_index(wp.lon)
+                try:
+                    cu = float(weather_data["current_u"][ci, cj])
+                    cv = float(weather_data["current_v"][ci, cj])
+                    cur_speed = round(math.sqrt(cu**2 + cv**2) * 1.944, 2)
+                except (IndexError, KeyError, TypeError):
+                    pass
+            current_speeds.append(cur_speed)
+
+            # Extract ice
+            ice_conc = 0.0
+            ice_data = getattr(ocean_router, '_ice_data', None)
+            if ice_data is not None:
+                from app.data.land_mask import lat_to_index, lon_to_index
+                ii, ij = lat_to_index(wp.lat), lon_to_index(wp.lon)
+                try:
+                    if ii < ice_data.shape[0] and ij < ice_data.shape[1]:
+                        ice_conc = float(ice_data[ii, ij]) * 100
+                except (IndexError, TypeError):
+                    pass
+            ice_values.append(ice_conc)
+
+            # Navigability
+            if ice_conc >= 70:
+                nav = "blocked"
+            elif wave_h >= 6.0:
+                nav = "dangerous"
+            elif ice_conc >= 30 or wave_h >= 4.0 or wind_kn >= 34:
+                nav = "restricted"
+            elif wave_h >= 2.5 or wind_kn >= 22:
+                nav = "moderate"
+            else:
+                nav = "open"
+            navigability_counts[nav] = navigability_counts.get(nav, 0) + 1
+
+            if wave_h > worst_wave:
+                worst_wave = wave_h
+                if nav in ("dangerous", "blocked", "restricted"):
+                    worst_advisory = f"{wave_h:.1f}m waves, BF{bf}, {wind_kn:.0f}kn wind"
+
+        # Use provided distance or computed distance
+        total_dist = route_input.total_distance_nm or cumulative_distance_nm
+
+        # Fuel estimate: hours × daily_consumption / 24
+        fuel_mt = round(cumulative_hours * daily_consumption / 24, 1) if cumulative_hours > 0 else 0
+        co2_mt = round(fuel_mt * 3.114, 1)  # VLSFO emission factor
+
+        weather_delay = max(0, cumulative_hours - cumulative_hours_calm)
+
+        # Risk classification
+        max_wave = max(wave_heights) if wave_heights else 0
+        max_wind = max(wind_speeds) if wind_speeds else 0
+        max_ice = max(ice_values) if ice_values else 0
+        if max_wave >= 6 or max_ice >= 70:
+            risk = "extreme"
+        elif max_wave >= 4 or max_wind >= 34 or max_ice >= 30:
+            risk = "high"
+        elif max_wave >= 2.5 or max_wind >= 22:
+            risk = "moderate"
+        else:
+            risk = "low"
+
+        # Build navigability summary: "Open (8/12), Moderate (3/12), Restricted (1/12)"
+        wp_count = len(wave_heights)
+        nav_parts = []
+        for nav_level in ["open", "moderate", "restricted", "dangerous", "blocked"]:
+            count = navigability_counts.get(nav_level, 0)
+            if count > 0:
+                nav_parts.append(f"{nav_level.capitalize()} ({count}/{wp_count})")
+        nav_summary = ", ".join(nav_parts) if nav_parts else "No data"
+
+        route_summaries.append(RouteWeatherSummary(
+            route_id=route_input.route_id,
+            label=route_input.label,
+            total_distance_nm=round(total_dist, 1),
+            total_hours_calm=round(cumulative_hours_calm, 1),
+            total_hours_weather=round(cumulative_hours, 1),
+            weather_delay_hours=round(weather_delay, 1),
+            avg_wave_height_m=round(sum(wave_heights) / len(wave_heights), 1) if wave_heights else 0,
+            max_wave_height_m=round(max_wave, 1),
+            avg_wind_speed_knots=round(sum(wind_speeds) / len(wind_speeds), 1) if wind_speeds else 0,
+            max_wind_speed_knots=round(max_wind, 1),
+            max_beaufort=max(beaufort_values) if beaufort_values else 0,
+            avg_current_speed_knots=round(sum(current_speeds) / len(current_speeds), 2) if current_speeds else 0,
+            max_ice_concentration_pct=round(max_ice, 1),
+            fuel_estimate_mt=fuel_mt,
+            co2_estimate_mt=co2_mt,
+            risk_level=risk,
+            worst_advisory=worst_advisory,
+            navigability_summary=nav_summary,
+            waypoint_count=wp_count,
+        ))
+
+    # Recommendation: lowest delay with acceptable risk
+    recommended_id = ""
+    recommendation_reason = ""
+    if route_summaries:
+        # Filter out extreme risk routes
+        safe_routes = [r for r in route_summaries if r.risk_level != "extreme"]
+        candidates = safe_routes if safe_routes else route_summaries
+
+        # Score: minimize (delay_hours * 10 + fuel_mt * 0.1)
+        best = min(candidates, key=lambda r: r.weather_delay_hours * 10 + r.fuel_estimate_mt * 0.1)
+        recommended_id = best.route_id
+
+        if best.weather_delay_hours <= 0.5:
+            recommendation_reason = f"{best.label}: minimal weather delay ({best.weather_delay_hours}h), lowest risk"
+        else:
+            recommendation_reason = (
+                f"{best.label}: best balance of delay ({best.weather_delay_hours}h) "
+                f"and fuel ({best.fuel_estimate_mt} MT). "
+                f"Risk: {best.risk_level}"
+            )
+
+    return MultiRouteComparisonResponse(
+        success=True,
+        routes=route_summaries,
+        recommended_route_id=recommended_id,
+        recommendation_reason=recommendation_reason,
+        source="ECMWF+NOAA",
+        cycle=store.cycle_timestamp.isoformat() if store.cycle_timestamp else None,
+    )
 
 @router.get("/graph-info", response_model=GraphInfoResponse)
 async def graph_info():

@@ -421,3 +421,81 @@ export async function fetchRouteForecast(
   }
 }
 
+
+// ═══════════════════════════════════════════════════════════════════
+//  Multi-Route Comparison — Weather Impact Across Alternatives
+// ═══════════════════════════════════════════════════════════════════
+
+export interface RouteWeatherSummary {
+  route_id: string;
+  label: string;
+  total_distance_nm: number;
+  total_hours_calm: number;
+  total_hours_weather: number;
+  weather_delay_hours: number;
+  avg_wave_height_m: number;
+  max_wave_height_m: number;
+  avg_wind_speed_knots: number;
+  max_wind_speed_knots: number;
+  max_beaufort: number;
+  avg_current_speed_knots: number;
+  max_ice_concentration_pct: number;
+  fuel_estimate_mt: number;
+  co2_estimate_mt: number;
+  risk_level: "low" | "moderate" | "high" | "extreme";
+  worst_advisory: string;
+  navigability_summary: string;
+  waypoint_count: number;
+}
+
+export interface MultiRouteComparisonResponse {
+  success: boolean;
+  routes: RouteWeatherSummary[];
+  recommended_route_id: string;
+  recommendation_reason: string;
+  source: string;
+  cycle: string | null;
+}
+
+export interface MultiRouteForecastRequest {
+  routes: Array<{
+    route_id: string;
+    label: string;
+    waypoints: Array<{ lat: number; lon: number }>;
+    total_distance_nm: number;
+  }>;
+  etd: string;
+  vessel_speed_knots: number;
+  vessel_type?: string;
+  vessel_dwt?: number;
+  vessel_loa?: number | null;
+  vessel_beam?: number | null;
+}
+
+/**
+ * Compare weather impact across multiple route alternatives.
+ *
+ * Sends all route alternatives + vessel characteristics to the engine.
+ * Returns per-route weather summary with delay, fuel, CO2, risk, and recommendation.
+ */
+export async function fetchMultiRouteForecast(
+  request: MultiRouteForecastRequest
+): Promise<MultiRouteComparisonResponse | null> {
+  try {
+    const response = await fetch("/api/multi-route-forecast", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request),
+    });
+
+    if (!response.ok) {
+      console.warn(`[WeatherRouting] Multi-route forecast failed: ${response.status}`);
+      return null;
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.warn(`[WeatherRouting] Multi-route forecast engine unreachable:`, error);
+    return null;
+  }
+}
