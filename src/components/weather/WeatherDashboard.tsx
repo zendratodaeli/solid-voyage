@@ -1757,7 +1757,7 @@ function MaritimeEngineCard({
                       {navConfig?.label}
                     </div>
                     <div className="text-[10px] mt-1 text-muted-foreground">
-                      NOAA + USNIC + IIP
+                      ECMWF + NOAA + USNIC + IIP
                     </div>
                   </div>
                 </TooltipTrigger>
