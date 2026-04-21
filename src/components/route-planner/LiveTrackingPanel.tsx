@@ -140,11 +140,32 @@ export default function LiveTrackingPanel({
   const [lastChecked, setLastChecked] = useState<Date | null>(null);
   const [expandedWaypoints, setExpandedWaypoints] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const autoFilledRef = useRef(false);
+
+  // ── Auto-fill position from first waypoint ──
+  useEffect(() => {
+    if (autoFilledRef.current || remainingWaypoints.length === 0) return;
+    const first = remainingWaypoints[0];
+    if (first && !currentLat && !currentLon) {
+      setCurrentLat(first.lat.toFixed(3));
+      setCurrentLon(first.lon.toFixed(3));
+      autoFilledRef.current = true;
+    }
+  }, [remainingWaypoints, currentLat, currentLon]);
+
+  // ── Parse coordinate (handles European comma locale) ──
+  const parseCoord = (val: string): number => {
+    return parseFloat(val.replace(",", "."));
+  };
+
+  // ── Validate coordinates ──
+  const hasValidCoords = currentLat.trim() !== "" && currentLon.trim() !== "" &&
+    !isNaN(parseCoord(currentLat)) && !isNaN(parseCoord(currentLon));
 
   // ── Fetch reroute analysis ──
   const fetchReroute = useCallback(async () => {
-    const lat = parseFloat(currentLat);
-    const lon = parseFloat(currentLon);
+    const lat = parseCoord(currentLat);
+    const lon = parseCoord(currentLon);
     if (isNaN(lat) || isNaN(lon) || remainingWaypoints.length === 0) return;
 
     setIsLoading(true);
@@ -234,7 +255,7 @@ export default function LiveTrackingPanel({
               variant={isLive ? "destructive" : "default"}
               className="h-7 text-xs gap-1.5"
               onClick={() => setIsLive(!isLive)}
-              disabled={!currentLat || !currentLon || remainingWaypoints.length === 0}
+              disabled={!hasValidCoords || remainingWaypoints.length === 0}
             >
               <Power className="h-3.5 w-3.5" />
               {isLive ? "Stop" : "Start"} Live
@@ -249,8 +270,8 @@ export default function LiveTrackingPanel({
           <div>
             <Label className="text-xs text-muted-foreground mb-1.5 block">Current Latitude</Label>
             <Input
-              type="number"
-              step="0.001"
+              type="text"
+              inputMode="decimal"
               placeholder="35.500"
               value={currentLat}
               onChange={(e) => setCurrentLat(e.target.value)}
@@ -261,8 +282,8 @@ export default function LiveTrackingPanel({
           <div>
             <Label className="text-xs text-muted-foreground mb-1.5 block">Current Longitude</Label>
             <Input
-              type="number"
-              step="0.001"
+              type="text"
+              inputMode="decimal"
               placeholder="-40.200"
               value={currentLon}
               onChange={(e) => setCurrentLon(e.target.value)}
@@ -279,7 +300,7 @@ export default function LiveTrackingPanel({
             variant="outline"
             className="w-full h-8 text-xs gap-1.5"
             onClick={fetchReroute}
-            disabled={isLoading || !currentLat || !currentLon || remainingWaypoints.length === 0}
+            disabled={isLoading || !hasValidCoords || remainingWaypoints.length === 0}
           >
             <RefreshCw className={cn("h-3.5 w-3.5", isLoading && "animate-spin")} />
             {isLoading ? "Analyzing..." : "Check Route Weather Now"}
