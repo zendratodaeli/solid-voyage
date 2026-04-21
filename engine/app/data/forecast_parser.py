@@ -85,6 +85,9 @@ class ForecastStore:
         self.sst_oisst: Optional[np.ndarray] = None   # NOAA OISST (satellite-verified)
         self.sst_rtofs: Optional[np.ndarray] = None   # RTOFS forecast SST
 
+        # Ensemble store (loaded separately, optional)
+        self.ensemble_store = None  # ECMWFEnsembleStore instance
+
         logger.info(
             f"ForecastStore initialized: {n_steps} steps × {n_lat}×{n_lon} grid "
             f"({n_steps * n_lat * n_lon * 4 * 10 / 1e9:.1f} GB estimated)"
@@ -228,6 +231,15 @@ class ForecastStore:
             "daily": daily,
             "weather_windows": weather_windows,
         }
+
+        # ── Attach ensemble uncertainty if available ──
+        if self.ensemble_store is not None and self.ensemble_store.is_ready:
+            ens = self.ensemble_store.get_percentiles_at(lat, lon)
+            result["ensemble"] = ens
+        else:
+            result["ensemble"] = {"ensemble_available": False}
+
+        return result
 
     def get_at_time(self, lat: float, lon: float, target_time: datetime) -> dict:
         """

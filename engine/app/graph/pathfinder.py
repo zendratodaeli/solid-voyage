@@ -232,6 +232,8 @@ class OceanRouter:
                         "🌍 ECMWF IFS+WAM active — 15-day forecast engaged. "
                         "NOAA RTOFS currents + USNIC ice retained."
                     )
+                    # ── Load ECMWF Ensemble (51 members) for uncertainty ──
+                    self._try_ensemble_load(store, ecmwf)
                 else:
                     logger.info("ECMWF blend skipped — NOAA GFS/WW3 remains active")
             else:
@@ -243,6 +245,31 @@ class OceanRouter:
         except Exception as e:
             logger.warning(f"ECMWF load failed (non-fatal): {e}")
             # GFS/WW3 store is untouched — routing and forecasts continue normally
+
+    def _try_ensemble_load(self, store, ecmwf):
+        """
+        Load ECMWF ENS (51 members) for confidence bands.
+        Runs after HRES is already loaded — completely non-blocking on failure.
+        """
+        try:
+            from app.data.ecmwf_parser import ECMWFEnsembleStore
+            from app.config import ECMWF_DIR
+
+            ens = ECMWFEnsembleStore(n_lat=store.n_lat, n_lon=store.n_lon)
+            success = ens.load(
+                ecmwf_dir=ECMWF_DIR,
+                cycle_timestamp=ecmwf.cycle_timestamp,
+            )
+            if success:
+                store.ensemble_store = ens
+                logger.info(
+                    "🎯 ECMWF ENS (51 members) loaded — "
+                    "P10/P50/P90 confidence bands available"
+                )
+            else:
+                logger.info("ENS data unavailable — deterministic forecast only")
+        except Exception as e:
+            logger.warning(f"ENS load failed (non-fatal): {e}")
 
 
     def _parse_gfs_variable(

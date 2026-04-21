@@ -1850,6 +1850,10 @@ function WeatherCharts({ forecastData, maritimeConditions, maxDays = 7 }: {
   maritimeConditions?: import("@/lib/weather-routing-client").MaritimeConditions | null;
   maxDays?: number;
 }) {
+  // Check if ensemble data is available
+  const ensembleData = (forecastData as any)?.ensemble;
+  const hasEnsemble = ensembleData?.ensemble_available === true;
+
   // Prepare chart data — sample every step, limited to maxDays
   const chartData = useMemo(() => {
     const data: Array<{
@@ -1859,6 +1863,10 @@ function WeatherCharts({ forecastData, maritimeConditions, maxDays = 7 }: {
       swellHeight: number;
       seaTemp: number;
       windSpeed: number;
+      waveP10?: number;
+      waveP90?: number;
+      windP10?: number;
+      windP90?: number;
     }> = [];
 
     const baseWave = maritimeConditions?.wave_height_m ?? 0;
@@ -1869,6 +1877,13 @@ function WeatherCharts({ forecastData, maritimeConditions, maxDays = 7 }: {
     const firstTime = forecastData.hourly.time[0] ? new Date(forecastData.hourly.time[0]).getTime() : 0;
     const cutoffTime = firstTime + maxHours * 3600 * 1000;
 
+    // Build ensemble time lookup for interpolation
+    const ensTimestamps = ensembleData?.timestamps || [];
+    const ensWaveP10 = ensembleData?.wave_height_p10 || [];
+    const ensWaveP90 = ensembleData?.wave_height_p90 || [];
+    const ensWindP10 = ensembleData?.wind_speed_p10 || [];
+    const ensWindP90 = ensembleData?.wind_speed_p90 || [];
+
     const step = 1;
     for (let i = 0; i < forecastData.hourly.time.length; i += step) {
       const dt = new Date(forecastData.hourly.time[i]);
@@ -1876,21 +1891,43 @@ function WeatherCharts({ forecastData, maritimeConditions, maxDays = 7 }: {
       // Stop if we've exceeded the user-selected forecast days
       if (dt.getTime() > cutoffTime) break;
 
-      // Use engine wave_height array if populated, otherwise synthesize from NOAA /conditions
-      // wave height using wind speed as a proxy for temporal variation
       const rawWave = forecastData.hourly.wave_height?.[i];
       const wind = windKnots?.[i] ?? 0;
       let wave: number;
       if (rawWave != null && rawWave > 0) {
         wave = rawWave;
       } else if (baseWave > 0) {
-        // Synthesize: scale around the known NOAA wave height using wind variation
         const baseWind = windKnots?.[0] ?? 1;
         const ratio = baseWind > 0 ? wind / baseWind : 1;
         wave = Math.max(0.1, baseWave * (0.7 + 0.3 * Math.min(ratio, 2)));
       } else {
-        // Fallback: Bretschneider approximation from wind (m)
         wave = Math.max(0, 0.0248 * wind * wind);
+      }
+
+      // Find nearest ensemble step for this timestamp
+      let wp10: number | undefined;
+      let wp90: number | undefined;
+      let wdp10: number | undefined;
+      let wdp90: number | undefined;
+
+      if (hasEnsemble && ensTimestamps.length > 0) {
+        const dtMs = dt.getTime();
+        let bestIdx = 0;
+        let bestDiff = Infinity;
+        for (let ei = 0; ei < ensTimestamps.length; ei++) {
+          const diff = Math.abs(new Date(ensTimestamps[ei]).getTime() - dtMs);
+          if (diff < bestDiff) {
+            bestDiff = diff;
+            bestIdx = ei;
+          }
+        }
+        // Only use if within 6 hours
+        if (bestDiff <= 6 * 3600 * 1000) {
+          wp10 = ensWaveP10[bestIdx] ?? undefined;
+          wp90 = ensWaveP90[bestIdx] ?? undefined;
+          wdp10 = ensWindP10[bestIdx] ?? undefined;
+          wdp90 = ensWindP90[bestIdx] ?? undefined;
+        }
       }
 
       data.push({
@@ -1901,18 +1938,31 @@ function WeatherCharts({ forecastData, maritimeConditions, maxDays = 7 }: {
         seaTemp: forecastData.hourly.sea_surface_temperature_forecast ??
           forecastData.hourly.sea_surface_temperature ?? 0,
         windSpeed: parseFloat(wind.toFixed(1)),
+        waveP10: wp10 !== undefined ? parseFloat(wp10.toFixed(2)) : undefined,
+        waveP90: wp90 !== undefined ? parseFloat(wp90.toFixed(2)) : undefined,
+        windP10: wdp10 !== undefined ? parseFloat(wdp10.toFixed(1)) : undefined,
+        windP90: wdp90 !== undefined ? parseFloat(wdp90.toFixed(1)) : undefined,
       });
     }
     return data;
-  }, [forecastData, maritimeConditions, maxDays]);
+  }, [forecastData, maritimeConditions, maxDays, hasEnsemble, ensembleData]);
+
+  const showEnsBands = hasEnsemble && chartData.some(d => d.waveP10 !== undefined);
 
   return (
     <Card>
       <CardHeader className="pb-3">
-        <CardTitle className="text-lg flex items-center gap-2">
-          <Eye className="h-5 w-5 text-blue-500" />
-          Hourly Forecast Charts
-        </CardTitle>
+        <div className="flex items-center justify-between">
+          <CardTitle className="text-lg flex items-center gap-2">
+            <Eye className="h-5 w-5 text-blue-500" />
+            Hourly Forecast Charts
+          </CardTitle>
+          {showEnsBands && (
+            <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-400 border border-purple-500/20 uppercase tracking-wider">
+              ENS 51 · P10–P90
+            </span>
+          )}
+        </div>
       </CardHeader>
       <CardContent>
         <Tabs defaultValue="waves" className="w-full">
@@ -1935,6 +1985,12 @@ function WeatherCharts({ forecastData, maritimeConditions, maxDays = 7 }: {
                     <stop offset="5%" stopColor="#8b5cf6" stopOpacity={0.3} />
                     <stop offset="95%" stopColor="#8b5cf6" stopOpacity={0} />
                   </linearGradient>
+                  {showEnsBands && (
+                    <linearGradient id="ensWaveGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.12} />
+                      <stop offset="95%" stopColor="#3b82f6" stopOpacity={0.03} />
+                    </linearGradient>
+                  )}
                 </defs>
                 <CartesianGrid
                   strokeDasharray="3 3"
@@ -1967,6 +2023,34 @@ function WeatherCharts({ forecastData, maritimeConditions, maxDays = 7 }: {
                 <Legend
                   wrapperStyle={{ fontSize: "11px" }}
                 />
+                {/* Ensemble P90 band (drawn first = behind) */}
+                {showEnsBands && (
+                  <Area
+                    type="monotone"
+                    dataKey="waveP90"
+                    name="P90 (pessimistic)"
+                    stroke="none"
+                    fill="url(#ensWaveGrad)"
+                    strokeWidth={0}
+                    dot={false}
+                    activeDot={false}
+                    connectNulls
+                  />
+                )}
+                {/* Ensemble P10 band */}
+                {showEnsBands && (
+                  <Area
+                    type="monotone"
+                    dataKey="waveP10"
+                    name="P10 (optimistic)"
+                    stroke="none"
+                    fill="hsl(var(--card))"
+                    strokeWidth={0}
+                    dot={false}
+                    activeDot={false}
+                    connectNulls
+                  />
+                )}
                 <Area
                   type="monotone"
                   dataKey="waveHeight"
