@@ -1170,6 +1170,8 @@ export function NavApiMultiRoutePlanner({
       // Add as port waypoint
       setWaypoints(prev => [...prev, {
         id: newId,
+        type: "port" as const,
+        order: prev.length,
         port: {
           displayName: portDetails.name,
           portCode: portDetails.locode,
@@ -1185,14 +1187,17 @@ export function NavApiMultiRoutePlanner({
         legConfig: prev.length > 0 ? {
           speed: prev[prev.length - 1]?.legConfig?.speed || 12.5,
           condition: prev[prev.length - 1]?.legConfig?.condition || "laden" as const,
-          dailyConsumption: prev[prev.length - 1]?.legConfig?.dailyConsumption,
+          dailyConsumption: prev[prev.length - 1]?.legConfig?.dailyConsumption || 0,
+          maxDraft: prev[prev.length - 1]?.legConfig?.maxDraft || "",
         } : undefined,
-      }]);
+      } as Waypoint]);
       toast.success(`📍 Added port: ${portDetails.name}`);
     } else {
       // Add as coordinate waypoint
       setWaypoints(prev => [...prev, {
         id: newId,
+        type: "port" as const,
+        order: prev.length,
         port: null,
         passage: null,
         manualLat: lat,
@@ -1202,9 +1207,10 @@ export function NavApiMultiRoutePlanner({
         legConfig: prev.length > 0 ? {
           speed: prev[prev.length - 1]?.legConfig?.speed || 12.5,
           condition: prev[prev.length - 1]?.legConfig?.condition || "laden" as const,
-          dailyConsumption: prev[prev.length - 1]?.legConfig?.dailyConsumption,
+          dailyConsumption: prev[prev.length - 1]?.legConfig?.dailyConsumption || 0,
+          maxDraft: prev[prev.length - 1]?.legConfig?.maxDraft || "",
         } : undefined,
-      }]);
+      } as Waypoint]);
       toast.success(`📍 Added waypoint: ${lat.toFixed(4)}°, ${lon.toFixed(4)}°`);
     }
   }, []);
@@ -2518,7 +2524,7 @@ export function NavApiMultiRoutePlanner({
           enrichedAlts.push({ ...alt, intel });
 
           // Auto-fill canal cost from intelligence (editable override)
-          if (alt.id === "primary" && intel.canalTolls.totalUsd > 0 && !canalCost) {
+          if (alt.id === "primary" && intel && intel.canalTolls.totalUsd > 0 && !canalCost) {
             setCanalCost(String(Math.round(intel.canalTolls.totalUsd)));
           }
         } catch (err) {
@@ -2660,10 +2666,12 @@ export function NavApiMultiRoutePlanner({
     }
 
     const primary = routeAlternatives.find(a => a.id === "primary");
-    if (!primary?.geometry?.coordinates?.length) return;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const primaryAny = primary as any;
+    if (!primaryAny?.geometry?.coordinates?.length) return;
 
     // Sample ~20 evenly-spaced points from the route geometry
-    const coords = primary.geometry.coordinates as [number, number][];
+    const coords = primaryAny.geometry.coordinates as [number, number][];
     const sampleCount = Math.min(20, coords.length);
     const step = Math.max(1, Math.floor(coords.length / sampleCount));
     const sampledWaypoints: Array<{ lat: number; lon: number }> = [];

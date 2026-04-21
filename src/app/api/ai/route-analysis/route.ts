@@ -260,7 +260,7 @@ export async function POST(request: Request) {
       system: SYSTEM_PROMPT,
       prompt: userPrompt,
       temperature: 0.3, // Low temp for consistent, professional analysis
-      maxTokens: 2000, // Increased for per-route analysis
+      maxOutputTokens: 2000, // Increased for per-route analysis
     });
 
     // Parse the JSON response

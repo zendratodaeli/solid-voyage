@@ -450,6 +450,9 @@ model Voyage {
   redeliveryPort        String?                // Where vessel is free after this voyage
   redeliveryDate        DateTime?              // When vessel becomes available
 
+  // ── AI Voyage Advisor ─────────────────────────────────────────
+  aiAdvisorSummary      String?  @db.Text       // GPT-4o generated GO/NO-GO assessment
+
   // Status
   status                VoyageStatus           @default(DRAFT)
 

@@ -21,7 +21,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { VoyageRoutePanel, type RouteCalculationResult, parseSmartCoordinates } from "./VoyageRoutePanel";
+import { parseSmartCoordinates } from "./VoyageRoutePanel";
+import { useVoyageAutoRoute, type AutoRouteResult, type RouteAlternative } from "@/hooks/useVoyageAutoRoute";
+import { VoyageRouteStatus } from "./VoyageRouteStatus";
+import { VoyageAdvisorDialog } from "./VoyageAdvisorDialog";
 import { NavApiPortSearch, type NavApiPort } from "@/components/route-planner/NavApiPortSearch";
 import { getLastPosition } from "@/actions/ais-actions";
 
@@ -43,6 +46,8 @@ type Vessel = {
   ballastSpeed: number;
   ladenConsumption?: number | null;
   ballastConsumption?: number | null;
+  // Draft
+  summerDraft?: number | null;
 };
 
 type FuelPriceEntry = {
@@ -94,10 +99,15 @@ export function VoyageForm({ vessels, voyage }: VoyageFormProps) {
   const [error, setError] = useState<string | null>(null);
   const [fromOptimizer, setFromOptimizer] = useState(false);
 
-  // ── Route Intelligence State ──────────────────────────────────
-  const [routeResult, setRouteResult] = useState<RouteCalculationResult | null>(null);
+  // ── Auto-Route Intelligence State ─────────────────────────────
+  const [autoRouteResult, setAutoRouteResult] = useState<AutoRouteResult | null>(null);
   const [openPortNavData, setOpenPortNavData] = useState<NavApiPort | null>(null);
-  const isRouteActive = !!routeResult;
+
+  // ── AI Voyage Advisor State ───────────────────────────────
+  const [showAdvisorDialog, setShowAdvisorDialog] = useState(false);
+  const [advisorSummary, setAdvisorSummary] = useState<string | null>(null);
+  const [isAdvisorLoading, setIsAdvisorLoading] = useState(false);
+  const [advisorVoyageUrl, setAdvisorVoyageUrl] = useState<string>("");
 
   // ── ETD & DWT (moved from VoyageRoutePanel to main form) ──────
   const [etd, setEtd] = useState(() => {
@@ -431,6 +441,230 @@ export function VoyageForm({ vessels, voyage }: VoyageFormProps) {
   const totalBallastDistance = legs.reduce((s, l, i) => l.type === "ballast" ? s + (parseFloat(legDistances[i]) || 0) : s, 0);
   const totalLadenDistance = legs.reduce((s, l, i) => l.type === "laden" ? s + (parseFloat(legDistances[i]) || 0) : s, 0);
 
+  // ── Auto-Route Engine ────────────────────────────────────────
+  // Automatically calculates route when all required fields are filled.
+  const selectedVessel = useMemo(() => vessels.find(v => v.id === formData.vesselId), [vessels, formData.vesselId]);
+
+  const autoRouteCallbacks = useMemo(() => ({
+    onDistancesCalculated: (distances: string[]) => {
+      setLegDistances(distances);
+    },
+    onCountryCodesDetected: (origin?: string, destination?: string) => {
+      if (origin) {
+        setLoadPortCountries(prev => {
+          const u = [...prev];
+          u[0] = origin;
+          return u;
+        });
+      }
+      if (destination) {
+        setDischargePortCountries(prev => {
+          const u = [...prev];
+          u[u.length - 1] = destination;
+          return u;
+        });
+      }
+    },
+  }), []);
+
+  const autoRouteInput = useMemo(() => ({
+    vesselId: formData.vesselId,
+    vesselName: selectedVessel?.name || "",
+    openPort: formData.openPort,
+    loadPorts,
+    dischargePorts,
+    ballastSpeed: parseFloat(formData.overrideBallastSpeed) || selectedVessel?.ballastSpeed || 14,
+    ladenSpeed: parseFloat(formData.overrideLadenSpeed) || selectedVessel?.ladenSpeed || 12,
+    ballastConsumption: selectedVessel?.ballastConsumption || 25,
+    ladenConsumption: selectedVessel?.ladenConsumption || 25,
+    draft: selectedVessel ? (selectedVessel as any).summerDraft || 0 : 0,
+    portLoadDays,
+    portDischargeDays,
+    portLoadWaiting,
+    portDischargeWaiting,
+    etd,
+  }), [formData.vesselId, formData.openPort, formData.overrideBallastSpeed, formData.overrideLadenSpeed,
+       selectedVessel, loadPorts, dischargePorts, portLoadDays, portDischargeDays, portLoadWaiting, portDischargeWaiting, etd]);
+
+  const { status: autoRouteStatus, result: autoRouteData, error: autoRouteError, missingFields: autoRouteMissing, isReady: autoRouteIsReady, recalculate: autoRouteRecalculate } = useVoyageAutoRoute(
+    autoRouteInput,
+    {
+      ...autoRouteCallbacks,
+      debounceMs: 1500,
+      enabled: !isEditMode,
+    }
+  );
+
+  // Store result for submission
+  useEffect(() => {
+    if (autoRouteData) {
+      setAutoRouteResult(autoRouteData);
+    }
+  }, [autoRouteData]);
+
+  // Compose autoRouteState for the status strip
+  const autoRouteState = useMemo(() => ({
+    status: autoRouteStatus,
+    result: autoRouteData,
+    error: autoRouteError,
+    missingFields: autoRouteMissing,
+    isReady: autoRouteIsReady,
+  }), [autoRouteStatus, autoRouteData, autoRouteError, autoRouteMissing, autoRouteIsReady]);
+
+  // ── Handler: Select alternative route ────────────────────────
+  const handleSelectAlternative = useCallback((alt: RouteAlternative) => {
+    if (!autoRouteData) return;
+    // Re-order alternatives so selected one becomes rank 1
+    const reranked = autoRouteData.alternatives.map(a => ({
+      ...a,
+      rank: a.id === alt.id ? 1 : a.rank >= alt.rank ? a.rank : a.rank + 1,
+    })).sort((a, b) => a.rank - b.rank);
+
+    const newResult: AutoRouteResult = {
+      ...autoRouteData,
+      bestRoute: { ...alt, rank: 1 },
+      alternatives: reranked,
+      legDistances: alt.legs.map(l => l.distanceNm),
+    };
+    setAutoRouteResult(newResult);
+    setLegDistances(alt.legs.map(l => String(l.distanceNm)));
+  }, [autoRouteData]);
+
+  // ── Handler: Open Route Planner in new tab (Deep Dive) ───────
+  const handleOpenRoutePlanner = useCallback(() => {
+    // Serialize form state to sessionStorage for the Route Planner to consume
+    const routePlannerData = {
+      vesselId: formData.vesselId,
+      openPort: formData.openPort,
+      loadPorts: loadPorts.filter(p => p.trim()),
+      dischargePorts: dischargePorts.filter(p => p.trim()),
+      ballastSpeed: formData.overrideBallastSpeed || selectedVessel?.ballastSpeed?.toString() || "14",
+      ladenSpeed: formData.overrideLadenSpeed || selectedVessel?.ladenSpeed?.toString() || "12",
+      portTimes: {
+        load: loadPorts.map((_, i) => ({
+          berthing: parseFloat(portLoadDays[i]) || 0,
+          waiting: parseFloat(portLoadWaiting[i]) || 0,
+        })),
+        discharge: dischargePorts.map((_, i) => ({
+          berthing: parseFloat(portDischargeDays[i]) || 0,
+          waiting: parseFloat(portDischargeWaiting[i]) || 0,
+        })),
+      },
+      draft: selectedVessel ? (selectedVessel as any).summerDraft || 0 : 0,
+      etd,
+      dwt,
+      timestamp: Date.now(),
+    };
+
+    try {
+      sessionStorage.setItem("voyage-form-to-route-planner", JSON.stringify(routePlannerData));
+    } catch (e) {
+      console.warn("[VoyageForm] Failed to store route planner data:", e);
+    }
+
+    // Open Route Planner in new tab
+    window.open(`/${orgSlug}/route-planner?from=voyage-form`, "_blank");
+  }, [formData, loadPorts, dischargePorts, portLoadDays, portLoadWaiting, portDischargeDays, portDischargeWaiting, selectedVessel, etd, dwt, orgSlug]);
+
+  // ── Auto-Save Draft (silent, 5s debounce) ────────────────────
+  const [autoSaveDraftId, setAutoSaveDraftId] = useState<string | null>(null);
+  const [autoSaveStatus, setAutoSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const autoSaveVersionRef = useRef(0);
+
+  // Build a fingerprint of all form fields to detect changes
+  const autoSaveFingerprint = useMemo(() => {
+    if (!formData.vesselId || isEditMode) return null; // Don't auto-save without vessel or in edit mode
+    return JSON.stringify({
+      vesselId: formData.vesselId,
+      openPort: formData.openPort,
+      loadPorts, dischargePorts,
+      portLoadDays, portDischargeDays,
+      portLoadWaiting, portDischargeWaiting,
+      cargoParcels: cargoParcels.map(p => ({ n: p.name, q: p.quantity, r: p.freightRate })),
+      fuelPrices: fuelPrices.map(f => ({ t: f.fuelType, p: f.price })),
+      etd, dwt,
+      brokerage: formData.brokeragePercent,
+      commission: formData.commissionPercent,
+    });
+  }, [formData.vesselId, formData.openPort, formData.brokeragePercent, formData.commissionPercent,
+      loadPorts, dischargePorts, portLoadDays, portDischargeDays, portLoadWaiting, portDischargeWaiting,
+      cargoParcels, fuelPrices, etd, dwt, isEditMode]);
+
+  useEffect(() => {
+    if (!autoSaveFingerprint) return;
+
+    if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+
+    autoSaveTimerRef.current = setTimeout(async () => {
+      const version = ++autoSaveVersionRef.current;
+      setAutoSaveStatus("saving");
+
+      try {
+        const draftPayload = {
+          vesselId: formData.vesselId,
+          openPort: formData.openPort || undefined,
+          loadPort: loadPorts.find(p => p.trim()) || "",
+          dischargePort: dischargePorts.filter(p => p.trim()).pop() || "",
+          voyageLegs: {
+            loadPorts: loadPorts.filter(p => p.trim()),
+            dischargePorts: dischargePorts.filter(p => p.trim()),
+            legs: legs.map((leg, i) => ({
+              ...leg,
+              distanceNm: parseFloat(legDistances[i]) || 0,
+            })),
+          },
+          ballastDistanceNm: totalBallastDistance || 0,
+          ladenDistanceNm: totalLadenDistance || 0,
+          loadPortDays: totalLoadDays,
+          dischargePortDays: totalDischargeDays,
+          waitingDays: totalWaitingDays,
+          brokeragePercent: parseFloat(formData.brokeragePercent) || 1.25,
+          commissionPercent: parseFloat(formData.commissionPercent) || 3.75,
+          bunkerPriceUsd: fuelPrices[0]?.price ? parseFloat(fuelPrices[0].price) : 500,
+          freightRateUnit: formData.freightRateUnit,
+          laycanStart: formData.laycanStart || undefined,
+          laycanEnd: formData.laycanEnd || undefined,
+          status: "DRAFT",
+        };
+
+        const isUpdate = !!autoSaveDraftId;
+        const url = isUpdate ? `/api/voyages/${autoSaveDraftId}` : "/api/voyages";
+        const method = isUpdate ? "PUT" : "POST";
+
+        const response = await fetch(url, {
+          method,
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(draftPayload),
+        });
+
+        if (response.ok && version === autoSaveVersionRef.current) {
+          const result = await response.json();
+          if (!isUpdate && result.data?.id) {
+            setAutoSaveDraftId(result.data.id);
+          }
+          setAutoSaveStatus("saved");
+          // Reset to idle after 3s
+          setTimeout(() => {
+            if (autoSaveVersionRef.current === version) setAutoSaveStatus("idle");
+          }, 3000);
+        } else if (version === autoSaveVersionRef.current) {
+          setAutoSaveStatus("error");
+        }
+      } catch {
+        if (version === autoSaveVersionRef.current) {
+          setAutoSaveStatus("error");
+          console.warn("[VoyageForm] Auto-save draft failed silently");
+        }
+      }
+    }, 5000);
+
+    return () => {
+      if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoSaveFingerprint]);
+
   // ── Per-Port ETA Calculation ─────────────────────────────────
   // Cascades: ETD → sailing days to port → port days → next leg
   const portETAs = useMemo(() => {
@@ -446,13 +680,13 @@ export function VoyageForm({ vessels, voyage }: VoyageFormProps) {
     const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
     // Use route intelligence legs if available for precise sailing times
-    const riLegs = routeResult?.legs || [];
+    const riLegs = autoRouteResult?.bestRoute?.legs || [];
 
     // Walk through each leg in order: Open→Load1→Load2...→Discharge1→Discharge2...
     const filledLoadPorts = loadPorts.filter(p => p.trim());
     const filledDischargePorts = dischargePorts.filter(p => p.trim());
 
-    let legIdx = 0; // index into routeResult.legs or form legs
+    let legIdx = 0; // index into autoRoute legs or form legs
 
     // Leg 0: Open → Load Port 1 (ballast)
     if (filledLoadPorts.length > 0) {
@@ -501,7 +735,7 @@ export function VoyageForm({ vessels, voyage }: VoyageFormProps) {
     }
 
     return { load: loadETAs, discharge: dischargeETAs };
-  }, [etd, routeResult, loadPorts, dischargePorts, legDistances, portLoadDays, portLoadWaiting, portLoadIdle, portDischargeDays, portDischargeWaiting, portDischargeIdle, formData.overrideBallastSpeed, formData.overrideLadenSpeed]);
+  }, [etd, autoRouteResult, loadPorts, dischargePorts, legDistances, portLoadDays, portLoadWaiting, portLoadIdle, portDischargeDays, portDischargeWaiting, portDischargeIdle, formData.overrideBallastSpeed, formData.overrideLadenSpeed]);
 
   // Format ETA for display
   const formatETA = (isoStr: string | null) => {
@@ -769,8 +1003,41 @@ export function VoyageForm({ vessels, voyage }: VoyageFormProps) {
   const [showPasteArea, setShowPasteArea] = useState(false);
   const [pasteText, setPasteText] = useState("");
   const [isDragOver, setIsDragOver] = useState(false);
-  const [triggerRecalculate, setTriggerRecalculate] = useState(0);
+  // triggerRecalculate removed — auto-route handles this via useVoyageAutoRoute hook
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // ── NavAPI Port Resolver (for AI-parsed port names) ───────────
+  // When AI parser extracts port names like "Newcastle, Australia", we need to
+  // resolve them via NavAPI to get the NavApiPort object (portCode, lat/lng)
+  // so that: 1) the NavApiPortSearch field displays the port, and
+  //          2) the auto-route hook can calculate distances.
+  const resolvePortNavData = useCallback(async (
+    portName: string,
+    role: "load" | "discharge",
+    index: number
+  ) => {
+    try {
+      // Extract just the city name (strip country suffix like "Newcastle, Australia" → "Newcastle")
+      const searchTerm = portName.split(",")[0].trim();
+      const response = await fetch(`/api/navapi/ports?q=${encodeURIComponent(searchTerm)}&limit=5`);
+      const data = await response.json();
+      const ports = data.ports;
+      if (!ports || ports.length === 0) return;
+
+      // Try to find best match — prefer exact-ish match with the full name
+      const fullNameLower = portName.toLowerCase();
+      const bestMatch = ports.find((p: NavApiPort) =>
+        fullNameLower.includes(p.displayName?.toLowerCase()) ||
+        p.displayName?.toLowerCase().includes(searchTerm.toLowerCase())
+      ) || ports[0];
+
+      if (bestMatch) {
+        handlePortSelect(role, index, bestMatch);
+      }
+    } catch (e) {
+      console.warn(`[VoyageForm] Failed to resolve port "${portName}":`, e);
+    }
+  }, [handlePortSelect]);
 
   // AI field mapping: apply parsed data to form
   const applyAIData = useCallback((data: Record<string, unknown>) => {
@@ -799,39 +1066,48 @@ export function VoyageForm({ vessels, voyage }: VoyageFormProps) {
 
     // ── Load Ports ──
     if (data.loadPorts && Array.isArray(data.loadPorts) && (data.loadPorts as string[]).length > 0) {
-      setLoadPorts(data.loadPorts as string[]);
+      const ports = data.loadPorts as string[];
+      setLoadPorts(ports);
       if (data.loadPortCountries && Array.isArray(data.loadPortCountries)) {
         setLoadPortCountries(data.loadPortCountries as string[]);
       } else {
-        // Trigger country lookup for each
-        (data.loadPorts as string[]).forEach((p, i) => lookupPortCountry(p, "load", i));
+        ports.forEach((p, i) => lookupPortCountry(p, "load", i));
       }
+      // Resolve via NavAPI to fill NavApiPortSearch display + coordinates
+      ports.forEach((p, i) => resolvePortNavData(p, "load", i));
     } else if (data.loadPort) {
-      setLoadPorts([data.loadPort as string]);
+      const port = data.loadPort as string;
+      setLoadPorts([port]);
       if (data.loadPortCountry) {
         setLoadPortCountries([data.loadPortCountry as string]);
       } else {
-        lookupPortCountry(data.loadPort as string, "load", 0);
+        lookupPortCountry(port, "load", 0);
       }
+      resolvePortNavData(port, "load", 0);
     } else {
       missing.push("Load port");
     }
 
     // ── Discharge Ports ──
     if (data.dischargePorts && Array.isArray(data.dischargePorts) && (data.dischargePorts as string[]).length > 0) {
-      setDischargePorts(data.dischargePorts as string[]);
+      const ports = data.dischargePorts as string[];
+      setDischargePorts(ports);
       if (data.dischargePortCountries && Array.isArray(data.dischargePortCountries)) {
         setDischargePortCountries(data.dischargePortCountries as string[]);
       } else {
-        (data.dischargePorts as string[]).forEach((p, i) => lookupPortCountry(p, "discharge", i));
+        ports.forEach((p, i) => lookupPortCountry(p, "discharge", i));
       }
+      // Resolve via NavAPI to fill NavApiPortSearch display + coordinates
+      ports.forEach((p, i) => resolvePortNavData(p, "discharge", i));
     } else if (data.dischargePort) {
-      setDischargePorts([data.dischargePort as string]);
+      const port = data.dischargePort as string;
+      setDischargePorts([port]);
       if (data.dischargePortCountry) {
         setDischargePortCountries([data.dischargePortCountry as string]);
       } else {
-        lookupPortCountry(data.dischargePort as string, "discharge", 0);
+        lookupPortCountry(port, "discharge", 0);
       }
+      resolvePortNavData(port, "discharge", 0);
     } else {
       missing.push("Discharge port");
     }
@@ -877,7 +1153,7 @@ export function VoyageForm({ vessels, voyage }: VoyageFormProps) {
     if (!data.freightRateUsd && !data.cargoParcels) missing.push("Freight rate");
 
     return missing;
-  }, [vessels, handleVesselChange, lookupPortCountry]);
+  }, [vessels, handleVesselChange, lookupPortCountry, resolvePortNavData]);
 
   // Handle file upload for AI import
   const handleAIImport = useCallback(async (file: File) => {
@@ -902,7 +1178,7 @@ export function VoyageForm({ vessels, voyage }: VoyageFormProps) {
 
       toast.success(`✨ Parsed ${fieldsFound} fields from ${file.name}`, { duration: 4000 });
       // Trigger route recalculation after AI fills ports
-      setTimeout(() => setTriggerRecalculate(n => n + 1), 2000);
+      // Auto-route will re-trigger via field change detection (no manual trigger needed)
 
       if (missing.length > 0) {
         setTimeout(() => {
@@ -950,7 +1226,7 @@ export function VoyageForm({ vessels, voyage }: VoyageFormProps) {
 
       toast.success(`✨ Parsed ${fieldsFound} fields from pasted text`, { duration: 4000 });
       // Trigger route recalculation after AI fills ports
-      setTimeout(() => setTriggerRecalculate(n => n + 1), 2000);
+      // Auto-route will re-trigger via field change detection (no manual trigger needed)
       setPasteText("");
       setShowPasteArea(false);
 
@@ -1023,7 +1299,7 @@ export function VoyageForm({ vessels, voyage }: VoyageFormProps) {
 
           toast.success(`✨ Parsed ${fieldsFound} fields from clipboard`, { duration: 4000 });
           // Trigger route recalculation after AI fills ports
-          setTimeout(() => setTriggerRecalculate(n => n + 1), 2000);
+          // Auto-route will re-trigger via field change detection (no manual trigger needed)
 
           if (missing.length > 0) {
             setTimeout(() => {
@@ -1106,16 +1382,30 @@ export function VoyageForm({ vessels, voyage }: VoyageFormProps) {
             name: c.name.trim(),
             amount: parseFloat(c.amount) || 0,
           })),
-          // Route Intelligence data (persisted for detail view)
-          ...(routeResult ? {
+          // Route Intelligence data (persisted for detail view + map rendering)
+          ...(autoRouteResult ? {
             routeIntelligence: {
-              routeData: routeResult.routeData,
-              calculatedAt: routeResult.calculatedAt,
-              totalDistanceNm: routeResult.totalDistanceNm,
-              totalEcaDistanceNm: routeResult.totalEcaDistanceNm,
-              estimatedSeaDays: routeResult.estimatedDays,
-              detectedCanals: routeResult.detectedCanals,
-              legs: routeResult.legs,
+              calculatedAt: autoRouteResult.calculatedAt,
+              totalDistanceNm: autoRouteResult.bestRoute.totalDistanceNm,
+              totalEcaDistanceNm: autoRouteResult.bestRoute.totalEcaDistanceNm,
+              totalHraDistanceNm: autoRouteResult.bestRoute.totalHraDistanceNm,
+              estimatedSeaDays: autoRouteResult.bestRoute.estimatedSeaDays,
+              detectedCanals: autoRouteResult.bestRoute.detectedCanals,
+              ecaZones: autoRouteResult.bestRoute.ecaZones,
+              hraZones: autoRouteResult.bestRoute.hraZones,
+              routeLabel: autoRouteResult.bestRoute.label,
+              legs: autoRouteResult.bestRoute.legs,
+              routeGeometry: autoRouteResult.bestRoute.routeGeometry,
+              alternatives: autoRouteResult.alternatives.map(a => ({
+                id: a.id,
+                label: a.label,
+                rank: a.rank,
+                totalDistanceNm: a.totalDistanceNm,
+                totalEcaDistanceNm: a.totalEcaDistanceNm,
+                estimatedSeaDays: a.estimatedSeaDays,
+                detectedCanals: a.detectedCanals,
+                rankReason: a.rankReason,
+              })),
             },
           } : {}),
         },
@@ -1170,9 +1460,16 @@ export function VoyageForm({ vessels, voyage }: VoyageFormProps) {
         ...(asDraft ? { status: "DRAFT" } : {}),
       };
 
-      // Branch: PUT for edit, POST for create
-      const url = isEditMode ? `/api/voyages/${voyage!.id}` : "/api/voyages";
-      const method = isEditMode ? "PUT" : "POST";
+      // Branch: PUT for edit or draft-to-final conversion, POST for fresh create
+      const draftId = autoSaveDraftId;
+      const url = isEditMode
+        ? `/api/voyages/${voyage!.id}`
+        : draftId && !asDraft
+          ? `/api/voyages/${draftId}` // Convert existing draft to final
+          : draftId
+            ? `/api/voyages/${draftId}` // Update existing draft
+            : "/api/voyages";
+      const method = isEditMode || draftId ? "PUT" : "POST";
 
       const response = await fetch(url, {
         method,
@@ -1202,8 +1499,91 @@ export function VoyageForm({ vessels, voyage }: VoyageFormProps) {
       }
 
       toast.success(asDraft ? "Saved as draft!" : (isEditMode ? "Voyage updated successfully!" : "Voyage created successfully!"));
-      router.refresh();
-      router.push(`/${orgSlug}/voyages/${voyageId}`);
+
+      if (asDraft || isEditMode) {
+        // For drafts and edits, navigate directly
+        router.refresh();
+        router.push(`/${orgSlug}/voyages/${voyageId}`);
+      } else {
+        // For CREATE: Show blocking AI Advisor dialog
+        const voyageUrl = `/${orgSlug}/voyages/${voyageId}`;
+        setAdvisorVoyageUrl(voyageUrl);
+        setShowAdvisorDialog(true);
+        setIsAdvisorLoading(true);
+        setAdvisorSummary(null);
+
+        try {
+          const aiResponse = await fetch("/api/voyages/ai-advisor", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              voyageId,
+              vesselName: selectedVessel?.name,
+              vesselType: selectedVessel?.vesselType,
+              dwt: selectedVessel?.dwt,
+              route: {
+                openPort: formData.openPort,
+                loadPorts: loadPorts.filter(p => p.trim()),
+                dischargePorts: dischargePorts.filter(p => p.trim()),
+                legDistances: legDistances.map(d => parseFloat(d) || 0),
+              },
+              cargo: {
+                type: formData.cargoType,
+                quantity: totalCargoOnboard,
+                freightRate: payload.freightRateUsd,
+                freightRateUnit: formData.freightRateUnit,
+              },
+              portDetails: {
+                loadPortDays: totalLoadDays,
+                dischargePortDays: totalDischargeDays,
+                waitingDays: totalWaitingDays,
+                idleDays: totalIdleDays,
+              },
+              financials: {
+                bunkerPrice: fuelPrices[0]?.price ? parseFloat(fuelPrices[0].price) : undefined,
+                brokeragePercent: parseFloat(formData.brokeragePercent) || undefined,
+                commissionPercent: parseFloat(formData.commissionPercent) || undefined,
+                canalTolls: parseFloat(formData.canalTolls) || undefined,
+                pdaCosts: totalPdaCosts || undefined,
+                additionalCosts: totalAdditionalCosts || undefined,
+              },
+              routeIntelligence: autoRouteResult ? {
+                totalDistanceNm: autoRouteResult.bestRoute.totalDistanceNm,
+                totalEcaDistanceNm: autoRouteResult.bestRoute.totalEcaDistanceNm,
+                totalHraDistanceNm: autoRouteResult.bestRoute.totalHraDistanceNm,
+                estimatedSeaDays: autoRouteResult.bestRoute.estimatedSeaDays,
+                detectedCanals: autoRouteResult.bestRoute.detectedCanals,
+                ecaZones: autoRouteResult.bestRoute.ecaZones,
+                hraZones: autoRouteResult.bestRoute.hraZones,
+                routeLabel: autoRouteResult.bestRoute.label,
+                alternatives: autoRouteResult.alternatives.map(a => ({
+                  label: a.label,
+                  rank: a.rank,
+                  totalDistanceNm: a.totalDistanceNm,
+                  totalEcaDistanceNm: a.totalEcaDistanceNm,
+                  estimatedSeaDays: a.estimatedSeaDays,
+                  detectedCanals: a.detectedCanals,
+                  rankReason: a.rankReason,
+                })),
+              } : undefined,
+              euEts: {
+                applicable: euEtsStatus.applicable,
+                percentage: euEtsStatus.percentage,
+                loadCountry: loadPortCountries.find(c => c),
+                dischargeCountry: [...dischargePortCountries].reverse().find(c => c),
+              },
+            }),
+          });
+
+          const aiResult = await aiResponse.json();
+          setAdvisorSummary(aiResult.summary || null);
+        } catch (aiError) {
+          console.warn("[VoyageForm] AI Advisor failed:", aiError);
+          setAdvisorSummary(null);
+        } finally {
+          setIsAdvisorLoading(false);
+        }
+      }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : "Something went wrong";
       toast.error(errorMessage);
@@ -1237,6 +1617,7 @@ export function VoyageForm({ vessels, voyage }: VoyageFormProps) {
   }
 
   return (
+    <>
     <form onSubmit={handleSubmit} className="space-y-6">
       {/* Optimizer pre-fill banner */}
       {fromOptimizer && (
@@ -1780,77 +2161,12 @@ export function VoyageForm({ vessels, voyage }: VoyageFormProps) {
         </div>
       </div>
 
-      {/* ─── Route Intelligence Panel ─── */}
-      <VoyageRoutePanel
-        openPort={formData.openPort}
-        loadPorts={loadPorts}
-        dischargePorts={dischargePorts}
-        selectedVesselId={formData.vesselId}
-        vessels={vessels as any}
-        ballastSpeed={formData.overrideBallastSpeed || undefined}
-        ladenSpeed={formData.overrideLadenSpeed || undefined}
-        etd={etd}
-        dwt={dwt}
-        onRouteCalculated={useCallback((result: RouteCalculationResult) => {
-          setRouteResult(result);
-          // Auto-fill leg distances
-          if (result.legDistances.length > 0) {
-            setLegDistances(result.legDistances.map(String));
-          }
-          // Auto-fill country codes
-          if (result.originCountryCode) {
-            setLoadPortCountries(prev => {
-              const u = [...prev];
-              u[0] = result.originCountryCode!;
-              return u;
-            });
-          }
-          if (result.destinationCountryCode) {
-            setDischargePortCountries(prev => {
-              const u = [...prev];
-              u[u.length - 1] = result.destinationCountryCode!;
-              return u;
-            });
-          }
-        }, [])}
-        onRouteClear={useCallback(() => {
-          setRouteResult(null);
-          // Reset distances to empty for manual entry
-          setLegDistances(prev => prev.map(() => ""));
-        }, [])}
-        onPortNameUpdate={useCallback((role: "open" | "load" | "discharge", index: number, name: string) => {
-          if (role === "open") {
-            setFormData(prev => ({ ...prev, openPort: name }));
-          } else if (role === "load") {
-            setLoadPorts(prev => {
-              const u = [...prev];
-              u[index] = name;
-              return u;
-            });
-          } else {
-            setDischargePorts(prev => {
-              const u = [...prev];
-              u[index] = name;
-              return u;
-            });
-          }
-        }, [])}
-        onCountryCodeUpdate={useCallback((role: "load" | "discharge", index: number, code: string) => {
-          if (role === "load") {
-            setLoadPortCountries(prev => {
-              const u = [...prev];
-              u[index] = code;
-              return u;
-            });
-          } else {
-            setDischargePortCountries(prev => {
-              const u = [...prev];
-              u[index] = code;
-              return u;
-            });
-          }
-        }, [])}
-        triggerRecalculate={triggerRecalculate}
+      {/* ─── Auto-Route Intelligence Strip ─── */}
+      <VoyageRouteStatus
+        state={autoRouteState}
+        onRecalculate={autoRouteRecalculate}
+        onSelectAlternative={handleSelectAlternative}
+        onOpenRoutePlanner={handleOpenRoutePlanner}
       />
 
       {/* EU ETS Auto-Detection Badge */}
@@ -1893,14 +2209,14 @@ export function VoyageForm({ vessels, voyage }: VoyageFormProps) {
             <Navigation className="h-3.5 w-3.5 text-sky-400" />
             Leg Distances (NM)
           </Label>
-          {isRouteActive && (
+          {autoRouteResult && (
             <span className="text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/20">
-              Auto-filled from Route Intelligence
+              Auto-filled from Route Engine
             </span>
           )}
         </div>
         <p className="text-xs text-muted-foreground -mt-1">
-          {isRouteActive
+          {autoRouteResult
             ? "Distances auto-calculated via NavAPI sea routing — you can override manually"
             : "Enter the distance for each leg of the voyage"}
         </p>
@@ -2430,29 +2746,60 @@ export function VoyageForm({ vessels, voyage }: VoyageFormProps) {
       {/* Freight Rate moved to Cargo Manifest parcels */}
 
       {/* Submit */}
-      <div className="flex justify-end gap-3 pt-4 border-t">
-        <Button
-          type="button"
-          variant="outline"
-          onClick={() => router.back()}
-          disabled={isLoading || isDraftSaving}
-        >
-          Cancel
-        </Button>
-        <Button
-          type="button"
-          variant="secondary"
-          disabled={isLoading || isDraftSaving}
-          onClick={(e) => handleSubmit(e as any, true)}
-        >
-          {isDraftSaving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-          Save as Draft
-        </Button>
-        <Button type="submit" disabled={isLoading || isDraftSaving}>
-          {isLoading && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-          {isEditMode ? "Save & Recalculate" : "Create Voyage"}
-        </Button>
+      <div className="flex items-center justify-between flex-wrap gap-3 pt-4 border-t">
+        {/* Auto-save status indicator */}
+        <div className="text-xs text-muted-foreground flex items-center gap-1.5 min-h-[20px]">
+          {!isEditMode && autoSaveStatus === "saving" && (
+            <><Loader2 className="h-3 w-3 animate-spin" /> Saving draft...</>
+          )}
+          {!isEditMode && autoSaveStatus === "saved" && (
+            <><Check className="h-3 w-3 text-emerald-400" /> Draft saved</>
+          )}
+          {!isEditMode && autoSaveStatus === "error" && (
+            <><AlertCircle className="h-3 w-3 text-red-400" /> Auto-save failed</>
+          )}
+        </div>
+        <div className="flex gap-3 ml-auto">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => router.back()}
+            disabled={isLoading || isDraftSaving}
+          >
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            variant="secondary"
+            disabled={isLoading || isDraftSaving}
+            onClick={(e) => handleSubmit(e as any, true)}
+          >
+            {isDraftSaving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+            Save as Draft
+          </Button>
+          <Button type="submit" disabled={isLoading || isDraftSaving}>
+            {isLoading && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+            {isEditMode ? "Save & Recalculate" : "Create Voyage"}
+          </Button>
+        </div>
       </div>
     </form>
+
+      {/* AI Voyage Advisor Dialog (shown after Create Voyage) */}
+      <VoyageAdvisorDialog
+        open={showAdvisorDialog}
+        onOpenChange={(open) => {
+          setShowAdvisorDialog(open);
+          // When dialog closes, navigate to voyage
+          if (!open && advisorVoyageUrl) {
+            router.refresh();
+            router.push(advisorVoyageUrl);
+          }
+        }}
+        summary={advisorSummary}
+        isLoading={isAdvisorLoading}
+        voyageUrl={advisorVoyageUrl}
+      />
+    </>
   );
 }

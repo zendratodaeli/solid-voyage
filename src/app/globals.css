@@ -163,3 +163,9 @@
   color: #d1d5db !important;
   text-shadow: 0 0 3px rgba(0, 0, 0, 0.8), 0 0 6px rgba(0, 0, 0, 0.6) !important;
 }
+
+/* Shimmer animation for loading states */
+@keyframes shimmer {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}

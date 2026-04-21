@@ -9,6 +9,8 @@ import {
   Pencil,
   MoreHorizontal,
   Lock,
+  Brain,
+  Navigation,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -36,6 +38,7 @@ import { CommentSection } from "@/components/voyages/CommentSection";
 import { EstimateVsActualCard } from "@/components/voyages/EstimateVsActualCard";
 import { VoyageScenarios } from "@/components/voyages/VoyageScenarios";
 import { getVoyagePermission, canModifyVoyage, canDeleteVoyage, type AuthUser } from "@/lib/permissions";
+import { RouteDetailMap } from "@/components/voyages/RouteDetailMap";
 import type { 
   VesselType,
   RecommendationAction,
@@ -290,6 +293,63 @@ export default async function VoyageDetailPage({
         </CardContent>
       </Card>
 
+      {/* AI Voyage Advisor Summary */}
+      {voyage.aiAdvisorSummary && (
+        <Card className="border-violet-500/20 bg-violet-500/5">
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-sm">
+              <Brain className="h-4 w-4 text-violet-400" />
+              AI Voyage Advisor
+            </CardTitle>
+            <CardDescription className="text-xs">
+              Automated GO/NO-GO assessment generated at creation
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="text-xs text-muted-foreground leading-relaxed whitespace-pre-wrap">
+              {voyage.aiAdvisorSummary}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Route Intelligence Map */}
+      {(() => {
+        const ri = voyage.voyageLegs as { routeIntelligence?: { routeGeometry?: [number, number][][]; routeLabel?: string; totalDistanceNm?: number; estimatedSeaDays?: number; legs?: Array<{ from: string; to: string; distanceNm: number; condition: "ballast" | "laden"; ecaDistanceNm?: number; hraDistanceNm?: number; geometry: [number, number][] }> } } | null;
+        const routeGeometry = ri?.routeIntelligence?.routeGeometry;
+        if (!routeGeometry || routeGeometry.length === 0) return null;
+
+        return (
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="flex items-center gap-2 text-sm">
+                <Navigation className="h-4 w-4 text-sky-400" />
+                Sea Route
+                {ri?.routeIntelligence?.routeLabel && (
+                  <span className="text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full bg-sky-500/15 text-sky-400 border border-sky-500/20">
+                    {ri.routeIntelligence.routeLabel}
+                  </span>
+                )}
+              </CardTitle>
+              {ri?.routeIntelligence?.totalDistanceNm && (
+                <CardDescription className="text-xs">
+                  {Math.round(ri.routeIntelligence.totalDistanceNm).toLocaleString()} NM total
+                  {ri.routeIntelligence.estimatedSeaDays && ` · ${ri.routeIntelligence.estimatedSeaDays.toFixed(1)} sea days`}
+                </CardDescription>
+              )}
+            </CardHeader>
+            <CardContent>
+              <RouteDetailMap
+                routeGeometry={routeGeometry}
+                legs={ri?.routeIntelligence?.legs}
+                routeLabel={ri?.routeIntelligence?.routeLabel}
+                totalDistanceNm={ri?.routeIntelligence?.totalDistanceNm}
+                className="h-[350px]"
+              />
+            </CardContent>
+          </Card>
+        );
+      })()}
       {/* Calculation Results */}
       {hasCalculation && voyage.calculations ? (
         <VoyageCalculationCard 

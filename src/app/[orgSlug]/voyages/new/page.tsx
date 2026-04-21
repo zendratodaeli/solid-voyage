@@ -27,6 +27,8 @@ async function getVessels(user: AuthUser) {
       ballastSpeed: true,
       ladenConsumption: true,
       ballastConsumption: true,
+      // Draft for route planning
+      summerDraft: true,
     },
     orderBy: { name: "asc" },
   });

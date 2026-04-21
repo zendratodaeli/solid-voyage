@@ -14,6 +14,7 @@ interface AdminInviteParams {
   permissions: {
     canManagePages: boolean;
     canManageMarketData: boolean;
+    canManageMaritimeIntel: boolean;
     canManageSettings: boolean;
     canManageAdmins: boolean;
     canManageNewsletter: boolean;
@@ -33,6 +34,7 @@ export async function sendAdminInvitation(params: AdminInviteParams) {
   const permissionLabels: { key: keyof typeof params.permissions; label: string }[] = [
     { key: "canManagePages", label: "Site Pages (CMS)" },
     { key: "canManageMarketData", label: "Global Market Data" },
+    { key: "canManageMaritimeIntel", label: "Maritime Intelligence" },
     { key: "canManageSettings", label: "Platform Settings" },
     { key: "canManageAdmins", label: "Admin Management" },
     { key: "canManageNewsletter", label: "Newsletter" },
