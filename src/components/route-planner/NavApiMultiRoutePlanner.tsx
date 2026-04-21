@@ -97,6 +97,7 @@ import { analyzeWeatherDeviation, checkBunkeringRange, analyzeNearestSafePorts, 
 import { fetchWeatherRoute, weatherWaypointsToCoordinates, fetchRouteForecast, fetchMultiRouteForecast, type WeatherRouteResponse, type RouteForecastResponse, type MultiRouteComparisonResponse } from "@/lib/weather-routing-client";
 import { AIRouteRecommendationPanel } from "./AIRouteRecommendation";
 import type { AIRouteRecommendation } from "@/app/api/ai/route-analysis/route";
+import LiveTrackingPanel from "./LiveTrackingPanel";
 
 // Types
 interface PortTimes {
@@ -3708,6 +3709,42 @@ export function NavApiMultiRoutePlanner({
                       </>
                     )}
                   </div>
+                </div>
+              )}
+
+              {/* ── Live Tracking Panel ── */}
+              {result && (
+                <div className="px-3 pb-2">
+                  <LiveTrackingPanel
+                    remainingWaypoints={
+                      routeAlternatives.length > 0
+                        ? routeAlternatives
+                            .find(a => a.id === selectedAlternativeId || a.id === "primary")
+                            ?.result?.legs?.flatMap(leg =>
+                              leg.geometry?.coordinates?.map((c: number[]) => ({ lat: c[1], lon: c[0] })) || []
+                            )
+                            ?.filter((_: { lat: number; lon: number }, i: number, arr: { lat: number; lon: number }[]) => {
+                              // Sample ~10 evenly spaced waypoints to avoid overloading
+                              if (arr.length <= 10) return true;
+                              const step = Math.floor(arr.length / 10);
+                              return i % step === 0 || i === arr.length - 1;
+                            }) || []
+                        : waypoints
+                            .filter(wp => {
+                              const lat = wp.port?.latitude ?? wp.manualLat;
+                              const lon = wp.port?.longitude ?? wp.manualLng;
+                              return lat != null && lon != null;
+                            })
+                            .map(wp => ({
+                              lat: wp.port?.latitude ?? wp.manualLat ?? 0,
+                              lon: wp.port?.longitude ?? wp.manualLng ?? 0,
+                            }))
+                    }
+                    vesselName={selectedVessel?.name || "Vessel"}
+                    vesselType={selectedVessel?.vesselType || "BULK_CARRIER"}
+                    vesselDwt={effectiveDWT || 50000}
+                    vesselSpeed={waypoints[0]?.legConfig?.speed || 12.5}
+                  />
                 </div>
               )}
 
