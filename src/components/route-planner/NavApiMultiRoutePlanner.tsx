@@ -449,6 +449,11 @@ export function NavApiMultiRoutePlanner({
   const [aisPosition, setAisPosition] = useState<{ lat: number; lng: number; name: string; updated: string } | null>(null);
   const aisAutoFillRef = useRef<string | null>(null); // Track which vessel was auto-filled
 
+  // ── Live Vessel Tracking State ──────────────────────────────────
+  const [vesselMapPosition, setVesselMapPosition] = useState<{ lat: number; lon: number; name: string; speed: number } | null>(null);
+  const [vesselTrail, setVesselTrail] = useState<import("./LiveTrackingPanel").TrailPoint[]>([]);
+  const [isLiveTracking, setIsLiveTracking] = useState(false);
+
   // Weather-optimized route from Python engine (optional, non-blocking)
   const [weatherRouteOverlay, setWeatherRouteOverlay] = useState<{
     coordinates: [number, number][];
@@ -2954,6 +2959,9 @@ export function NavApiMultiRoutePlanner({
           onMapClick={handleMapClick}
           onMapRightClick={handleMapRightClick}
           clickModeLabel={activeClickTarget?.label || null}
+          vesselPosition={vesselMapPosition || (aisPosition ? { lat: aisPosition.lat, lon: aisPosition.lng, name: selectedVessel?.name || "Vessel" } : null)}
+          vesselTrail={vesselTrail}
+          isLiveTracking={isLiveTracking}
         />
 
         {/* ── Map Context Menu (right-click) ── */}
@@ -3740,10 +3748,24 @@ export function NavApiMultiRoutePlanner({
                               lon: wp.port?.longitude ?? wp.manualLng ?? 0,
                             }))
                     }
+                    plannedRouteCoords={
+                      routeAlternatives.length > 0
+                        ? routeAlternatives
+                            .find(a => a.id === selectedAlternativeId || a.id === "primary")
+                            ?.result?.legs?.flatMap(leg =>
+                              leg.geometry?.coordinates?.map((c: number[]) => ({ lat: c[1], lon: c[0] })) || []
+                            ) || []
+                        : []
+                    }
                     vesselName={selectedVessel?.name || "Vessel"}
                     vesselType={selectedVessel?.vesselType || "BULK_CARRIER"}
                     vesselDwt={effectiveDWT || 50000}
                     vesselSpeed={waypoints[0]?.legConfig?.speed || 12.5}
+                    aisLat={aisPosition?.lat}
+                    aisLon={aisPosition?.lng}
+                    onVesselPositionChange={setVesselMapPosition}
+                    onTrailUpdate={setVesselTrail}
+                    onLiveStateChange={setIsLiveTracking}
                   />
                 </div>
               )}

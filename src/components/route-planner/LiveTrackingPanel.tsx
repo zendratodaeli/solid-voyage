@@ -80,16 +80,36 @@ interface RerouteResponse {
   cycle: string | null;
 }
 
+/** Trail point for map visualization */
+export interface TrailPoint {
+  lat: number;
+  lon: number;
+  timestamp: string;
+  deviationNm: number;
+  status: "on-route" | "minor-deviation" | "off-route";
+}
+
 interface LiveTrackingPanelProps {
   /** Remaining waypoints from route planner */
   remainingWaypoints?: Array<{ lat: number; lon: number }>;
+  /** Full planned route coordinates for deviation comparison */
+  plannedRouteCoords?: Array<{ lat: number; lon: number }>;
   /** Vessel info */
   vesselName?: string;
   vesselType?: string;
   vesselDwt?: number;
   vesselSpeed?: number;
+  /** AIS position if available from vessel selection */
+  aisLat?: number | null;
+  aisLon?: number | null;
   /** Callback when position updates */
   onPositionUpdate?: (lat: number, lon: number) => void;
+  /** Callback to send vessel position to map */
+  onVesselPositionChange?: (position: { lat: number; lon: number; name: string; speed: number } | null) => void;
+  /** Callback to send trail data to map */
+  onTrailUpdate?: (trail: TrailPoint[]) => void;
+  /** Callback to notify parent of live tracking state */
+  onLiveStateChange?: (isLive: boolean) => void;
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -125,11 +145,17 @@ const NAV_COLORS = {
 
 export default function LiveTrackingPanel({
   remainingWaypoints = [],
+  plannedRouteCoords = [],
   vesselName = "Unknown Vessel",
   vesselType = "BULK_CARRIER",
   vesselDwt = 50000,
   vesselSpeed = 12.5,
+  aisLat,
+  aisLon,
   onPositionUpdate,
+  onVesselPositionChange,
+  onTrailUpdate,
+  onLiveStateChange,
 }: LiveTrackingPanelProps) {
   // State
   const [isLive, setIsLive] = useState(false);
@@ -141,17 +167,64 @@ export default function LiveTrackingPanel({
   const [expandedWaypoints, setExpandedWaypoints] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const autoFilledRef = useRef(false);
+  const [positionTrail, setPositionTrail] = useState<TrailPoint[]>([]);
+  const mockIndexRef = useRef(0);
+  const mockIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // ── Auto-fill position from first waypoint ──
-  useEffect(() => {
-    if (autoFilledRef.current || remainingWaypoints.length === 0) return;
-    const first = remainingWaypoints[0];
-    if (first && !currentLat && !currentLon) {
-      setCurrentLat(first.lat.toFixed(3));
-      setCurrentLon(first.lon.toFixed(3));
-      autoFilledRef.current = true;
+  // ── Haversine distance (nm) ──
+  const haversineNm = useCallback((lat1: number, lon1: number, lat2: number, lon2: number): number => {
+    const R = 3440.065; // Earth radius in nautical miles
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = Math.sin(dLat / 2) ** 2 +
+      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+      Math.sin(dLon / 2) ** 2;
+    return 2 * R * Math.asin(Math.sqrt(a));
+  }, []);
+
+  // ── Compute deviation from planned route ──
+  const computeDeviation = useCallback((lat: number, lon: number): { deviationNm: number; status: TrailPoint["status"] } => {
+    if (plannedRouteCoords.length === 0) return { deviationNm: 0, status: "on-route" };
+    
+    // Find nearest point on planned route
+    let minDist = Infinity;
+    for (const point of plannedRouteCoords) {
+      const dist = haversineNm(lat, lon, point.lat, point.lon);
+      if (dist < minDist) minDist = dist;
     }
-  }, [remainingWaypoints, currentLat, currentLon]);
+    
+    // Thresholds: <5nm = on-route, 5-15nm = minor, >15nm = off-route
+    const status: TrailPoint["status"] = minDist < 5 ? "on-route" : minDist < 15 ? "minor-deviation" : "off-route";
+    return { deviationNm: minDist, status };
+  }, [plannedRouteCoords, haversineNm]);
+
+  // ── Add position to trail ──
+  const addToTrail = useCallback((lat: number, lon: number) => {
+    const { deviationNm, status } = computeDeviation(lat, lon);
+    const point: TrailPoint = {
+      lat, lon,
+      timestamp: new Date().toISOString(),
+      deviationNm,
+      status,
+    };
+    setPositionTrail(prev => {
+      const updated = [...prev, point];
+      onTrailUpdate?.(updated);
+      return updated;
+    });
+    onVesselPositionChange?.({ lat, lon, name: vesselName, speed: vesselSpeed });
+  }, [computeDeviation, onTrailUpdate, onVesselPositionChange, vesselName, vesselSpeed]);
+
+  // ── Auto-fill from AIS position ──
+  useEffect(() => {
+    if (aisLat != null && aisLon != null && !autoFilledRef.current) {
+      setCurrentLat(aisLat.toFixed(3));
+      setCurrentLon(aisLon.toFixed(3));
+      autoFilledRef.current = true;
+      // Show vessel on map immediately
+      onVesselPositionChange?.({ lat: aisLat, lon: aisLon, name: vesselName, speed: vesselSpeed });
+    }
+  }, [aisLat, aisLon, vesselName, vesselSpeed, onVesselPositionChange]);
 
   // ── Parse coordinate (handles European comma locale) ──
   const parseCoord = (val: string): number => {
@@ -214,6 +287,57 @@ export default function LiveTrackingPanel({
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
   }, [isLive, fetchReroute]);
+
+  // ── Mock AIS Simulation (demo mode) ──
+  // Moves vessel along planned route coords every 3s (compressed 5-min intervals)
+  // When live NavAPI AIS tokens are available, replace this with real AIS polling
+  useEffect(() => {
+    if (isLive && plannedRouteCoords.length > 0) {
+      // Add starting position to trail
+      const lat = parseCoord(currentLat);
+      const lon = parseCoord(currentLon);
+      if (!isNaN(lat) && !isNaN(lon)) {
+        addToTrail(lat, lon);
+      }
+
+      // Start mock movement along route (every 3 seconds for demo)
+      const MOCK_INTERVAL_MS = 3000; // 3s = simulates 5-min AIS
+      const step = Math.max(1, Math.floor(plannedRouteCoords.length / 100)); // ~100 positions total
+
+      mockIntervalRef.current = setInterval(() => {
+        mockIndexRef.current += step;
+        if (mockIndexRef.current >= plannedRouteCoords.length) {
+          // Reached destination
+          mockIndexRef.current = plannedRouteCoords.length - 1;
+          if (mockIntervalRef.current) clearInterval(mockIntervalRef.current);
+          toast.success("🏁 Vessel arrived at destination!");
+          return;
+        }
+
+        const nextPos = plannedRouteCoords[mockIndexRef.current];
+        // Add slight random deviation for realism (±0.02°)
+        const jitterLat = nextPos.lat + (Math.random() - 0.5) * 0.04;
+        const jitterLon = nextPos.lon + (Math.random() - 0.5) * 0.04;
+
+        setCurrentLat(jitterLat.toFixed(3));
+        setCurrentLon(jitterLon.toFixed(3));
+        addToTrail(jitterLat, jitterLon);
+      }, MOCK_INTERVAL_MS);
+    }
+
+    return () => {
+      if (mockIntervalRef.current) clearInterval(mockIntervalRef.current);
+    };
+  }, [isLive]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Notify parent of live state ──
+  useEffect(() => {
+    onLiveStateChange?.(isLive);
+    if (!isLive) {
+      // Clear trail when stopping
+      mockIndexRef.current = 0;
+    }
+  }, [isLive, onLiveStateChange]);
 
   // ── Format time ──
   const formatEta = (isoStr: string) => {

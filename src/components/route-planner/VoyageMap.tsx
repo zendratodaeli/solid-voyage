@@ -7,7 +7,7 @@
  * port markers, and ECA/HRA zones on a MaritimeMap.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import dynamic from "next/dynamic";
 import { segmentRouteByZone, ZONE_COLORS, ZONE_LABELS } from "@/lib/route-zone-classifier";
 import { LegendItem } from "@/components/map/LegendItem";
@@ -79,6 +79,26 @@ interface RouteResultData {
   }>;
 }
 
+/** A point in the vessel's tracking trail */
+export interface TrailPoint {
+  lat: number;
+  lon: number;
+  timestamp: string;
+  /** Distance from planned route in nautical miles */
+  deviationNm: number;
+  /** Status derived from deviation */
+  status: "on-route" | "minor-deviation" | "off-route";
+}
+
+/** Current vessel position for map display */
+export interface VesselMapPosition {
+  lat: number;
+  lon: number;
+  heading?: number;
+  name?: string;
+  speed?: number;
+}
+
 interface VoyageMapProps {
   waypoints: Waypoint[];
   result: RouteResultData | null;
@@ -99,6 +119,12 @@ interface VoyageMapProps {
   onMapRightClick?: (lat: number, lon: number, containerPoint: { x: number; y: number }) => void;
   /** Label shown on map when click-to-fill is active */
   clickModeLabel?: string | null;
+  /** Live vessel position (ship icon on map) */
+  vesselPosition?: VesselMapPosition | null;
+  /** Vessel tracking trail (color-coded polyline) */
+  vesselTrail?: TrailPoint[];
+  /** Whether live tracking is active (enables pulsing animation) */
+  isLiveTracking?: boolean;
 }
 
 /** Route variant for multi-route map overlay */
@@ -124,7 +150,14 @@ const ROUTE_VARIANT_COLORS: Record<string, string> = {
   "seca-minimized": "#06b6d4", // Cyan
 };
 
-export function VoyageMap({ waypoints, result, className, weatherPoints, alternativeRoutes, onMapClick, onMapRightClick, clickModeLabel }: VoyageMapProps) {
+/** Trail segment colors based on deviation status */
+const TRAIL_COLORS = {
+  "on-route": "#22c55e",       // Green
+  "minor-deviation": "#f59e0b", // Amber/Orange
+  "off-route": "#ef4444",       // Red
+} as const;
+
+export function VoyageMap({ waypoints, result, className, weatherPoints, alternativeRoutes, onMapClick, onMapRightClick, clickModeLabel, vesselPosition, vesselTrail, isLiveTracking }: VoyageMapProps) {
   const [L, setL] = useState<typeof import("leaflet") | null>(null);
   const [mapReady, setMapReady] = useState(false);
 
@@ -181,6 +214,61 @@ export function VoyageMap({ waypoints, result, className, weatherPoints, alterna
     });
   };
 
+  // Create vessel ship icon
+  const createVesselIcon = (heading = 0) => {
+    if (!L) return undefined;
+    const pulseClass = isLiveTracking ? 'animation: pulse 2s infinite;' : '';
+    const vesselHtml = `
+      <div style="position:relative;width:36px;height:36px;display:flex;align-items:center;justify-content:center;">
+        <div style="position:absolute;width:36px;height:36px;border-radius:50%;background:rgba(59,130,246,0.15);${pulseClass}"></div>
+        <div style="transform:rotate(${heading}deg);width:28px;height:28px;display:flex;align-items:center;justify-content:center;filter:drop-shadow(0 2px 4px rgba(0,0,0,0.5));">
+          <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="#3b82f6" stroke="white" stroke-width="1.5">
+            <path d="M2 21c.6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1 .6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1"/>
+            <path d="M19.38 20A11.6 11.6 0 0 0 21 14l-9-4-9 4c0 2.9.94 5.34 2.81 7.76"/>
+            <path d="M19 13V7a2 2 0 0 0-2-2H7a2 2 0 0 0-2 2v6"/>
+            <path d="M12 2v3"/>
+          </svg>
+        </div>
+      </div>
+    `;
+    return L.divIcon({
+      html: vesselHtml,
+      className: "vessel-marker",
+      iconSize: [36, 36],
+      iconAnchor: [18, 18],
+    });
+  };
+
+  // Build color-segmented trail from trail points
+  const trailSegments = useMemo(() => {
+    if (!vesselTrail || vesselTrail.length < 2) return [];
+    const segments: Array<{ positions: [number, number][]; status: TrailPoint["status"]; color: string }> = [];
+    let currentSegment: { positions: [number, number][]; status: TrailPoint["status"]; color: string } = {
+      positions: [[vesselTrail[0].lat, vesselTrail[0].lon]],
+      status: vesselTrail[0].status,
+      color: TRAIL_COLORS[vesselTrail[0].status],
+    };
+
+    for (let i = 1; i < vesselTrail.length; i++) {
+      const point = vesselTrail[i];
+      if (point.status !== currentSegment.status) {
+        // End current segment with this point (for continuity)
+        currentSegment.positions.push([point.lat, point.lon]);
+        segments.push(currentSegment);
+        // Start new segment
+        currentSegment = {
+          positions: [[point.lat, point.lon]],
+          status: point.status,
+          color: TRAIL_COLORS[point.status],
+        };
+      } else {
+        currentSegment.positions.push([point.lat, point.lon]);
+      }
+    }
+    segments.push(currentSegment);
+    return segments;
+  }, [vesselTrail]);
+
   if (!mapReady) {
     return (
       <div className={`${className} bg-muted flex items-center justify-center`}>
@@ -229,6 +317,28 @@ export function VoyageMap({ waypoints, result, className, weatherPoints, alterna
               <span className="text-[10px]">{alt.label}</span>
             </div>
           ))}
+        </>
+      )}
+      {(vesselPosition || (vesselTrail && vesselTrail.length > 0)) && (
+        <>
+          <div className="border-t border-border/30 my-1" />
+          <div className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Vessel Tracking</div>
+          <div className="flex items-center gap-2">
+            <div className="w-2.5 h-2.5 rounded-full bg-blue-500" />
+            <span className="text-[10px]">Vessel Position</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="w-4 h-0 border-t-2" style={{ borderColor: TRAIL_COLORS["on-route"] }} />
+            <span className="text-[10px]">On Route</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="w-4 h-0 border-t-2" style={{ borderColor: TRAIL_COLORS["minor-deviation"] }} />
+            <span className="text-[10px]">Minor Deviation</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="w-4 h-0 border-t-2" style={{ borderColor: TRAIL_COLORS["off-route"] }} />
+            <span className="text-[10px]">Off Route</span>
+          </div>
         </>
       )}
     </>
@@ -389,6 +499,64 @@ export function VoyageMap({ waypoints, result, className, weatherPoints, alterna
             </Tooltip>
           </CircleMarker>
         ))}
+
+        {/* ═══ LIVE VESSEL TRACKING ═══ */}
+
+        {/* Vessel Trail — Color-coded polyline segments */}
+        {trailSegments.map((seg, i) => (
+          <Polyline
+            key={`trail-seg-${i}`}
+            positions={seg.positions}
+            pathOptions={{
+              color: seg.color,
+              weight: 4,
+              opacity: 0.85,
+              lineCap: "round",
+              lineJoin: "round",
+            }}
+          >
+            <Tooltip sticky>
+              <div style={{ fontSize: '12px', fontWeight: 500 }}>
+                {seg.status === "on-route" ? "✅ On Route" : seg.status === "minor-deviation" ? "⚠️ Minor Deviation" : "🔴 Off Route"}
+              </div>
+            </Tooltip>
+          </Polyline>
+        ))}
+
+        {/* Vessel Icon — ship marker at current position */}
+        {vesselPosition && (
+          <Marker
+            position={[vesselPosition.lat, vesselPosition.lon]}
+            icon={createVesselIcon(vesselPosition.heading)}
+          >
+            <Popup>
+              <div style={{ minWidth: '160px' }}>
+                <div style={{ fontWeight: 600, fontSize: '13px', marginBottom: '4px' }}>
+                  ⛴️ {vesselPosition.name || "Vessel"}
+                </div>
+                <div style={{ fontSize: '11px', color: '#666' }}>
+                  {vesselPosition.lat.toFixed(4)}°N, {vesselPosition.lon.toFixed(4)}°E
+                </div>
+                {vesselPosition.speed !== undefined && (
+                  <div style={{ fontSize: '11px', color: '#666' }}>
+                    Speed: {vesselPosition.speed.toFixed(1)} kn
+                  </div>
+                )}
+                {isLiveTracking && (
+                  <div style={{ fontSize: '10px', color: '#3b82f6', marginTop: '4px', fontWeight: 500 }}>
+                    ● LIVE TRACKING
+                  </div>
+                )}
+              </div>
+            </Popup>
+            <Tooltip direction="top" offset={[0, -20]} permanent={isLiveTracking}>
+              <span style={{ fontSize: '11px', fontWeight: 500 }}>
+                {vesselPosition.name || "Vessel"}
+                {isLiveTracking && " 🔴"}
+              </span>
+            </Tooltip>
+          </Marker>
+        )}
       </MaritimeMap>
     </div>
   );
