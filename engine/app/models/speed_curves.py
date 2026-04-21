@@ -75,6 +75,10 @@ class VesselSpeedCurve:
     The model uses quadratic interpolation between three reference points
     (2m, 4m, 6m wave heights) from published industry data, then applies
     heading correction for head/beam/following seas.
+
+    Extended with:
+    - Hull fouling degradation (months since last cleaning → 0-15% loss)
+    - Trim optimization factor (suboptimal trim → 0-3% additional loss)
     """
 
     def __init__(
@@ -83,11 +87,15 @@ class VesselSpeedCurve:
         dwt: float = 50000,
         loa: Optional[float] = None,
         beam: Optional[float] = None,
+        hull_fouling_months: int = 0,
+        trim_offset_m: float = 0.0,
     ):
         self.vessel_type = vessel_type.upper()
         self.dwt = dwt
         self.loa = loa
         self.beam = beam
+        self.hull_fouling_months = hull_fouling_months
+        self.trim_offset_m = trim_offset_m
 
         # Look up profile
         self.profile = VESSEL_PROFILES.get(self.vessel_type, DEFAULT_PROFILE)
@@ -97,6 +105,52 @@ class VesselSpeedCurve:
         self._loss_4m = self.profile["wave_4m"]
         self._loss_6m = self.profile["wave_6m"]
         self._beam_factor = self.profile["beam_factor"]
+
+        # Compute fouling and trim penalties
+        self._fouling_loss_pct = self._compute_fouling_loss()
+        self._trim_loss_pct = self._compute_trim_loss()
+
+    def _compute_fouling_loss(self) -> float:
+        """
+        Hull fouling speed loss based on months since last dry-dock/cleaning.
+
+        Reference: IMO MEPC.1/Circ.815 + Schultz (2007) regression.
+        - 0-3 months: 0-1% (fresh antifouling)
+        - 3-6 months: 1-3% (biofilm accumulation)
+        - 6-12 months: 3-7% (macro-fouling begins)
+        - 12-24 months: 7-12% (heavy fouling)
+        - 24+ months: 12-15% (critical — dry-dock needed)
+        """
+        m = self.hull_fouling_months
+        if m <= 0:
+            return 0.0
+        elif m <= 3:
+            return round(m * 0.33, 1)    # ~1% at 3 months
+        elif m <= 6:
+            return round(1.0 + (m - 3) * 0.67, 1)  # ~3% at 6 months
+        elif m <= 12:
+            return round(3.0 + (m - 6) * 0.67, 1)  # ~7% at 12 months
+        elif m <= 24:
+            return round(7.0 + (m - 12) * 0.42, 1)  # ~12% at 24 months
+        else:
+            return min(15.0, round(12.0 + (m - 24) * 0.25, 1))
+
+    def _compute_trim_loss(self) -> float:
+        """
+        Trim optimization penalty.
+
+        Optimal trim varies by vessel/loading. Suboptimal trim increases
+        wave-making resistance. Based on ITTC 7.5-04-01-01.1 guidelines.
+
+        - 0.0m offset: 0% (optimal trim)
+        - 0.5m offset: ~0.5%
+        - 1.0m offset: ~1.5%
+        - 2.0m offset: ~3.0%
+        """
+        t = abs(self.trim_offset_m)
+        if t <= 0.1:
+            return 0.0
+        return min(3.0, round(t * t * 0.75, 1))
 
     def speed_loss_pct(
         self,
@@ -118,7 +172,7 @@ class VesselSpeedCurve:
             Speed loss as percentage (0-100)
         """
         if wave_height <= 0.0:
-            return 0.0
+            return max(0.0, self._fouling_loss_pct + self._trim_loss_pct)
 
         # 1. Wave-induced speed loss (quadratic interpolation)
         wave_loss = self._interpolate_wave_loss(wave_height)
@@ -130,8 +184,11 @@ class VesselSpeedCurve:
         # 3. Wind penalty (small addition on top of waves)
         wind_loss = self._wind_penalty(wind_speed_knots)
 
-        # 4. Total loss, capped at 60% (vessel would heave-to beyond that)
-        total = min(wave_loss + wind_loss, 60.0)
+        # 4. Hull fouling + trim penalties (additive)
+        fouling_trim = self._fouling_loss_pct + self._trim_loss_pct
+
+        # 5. Total loss, capped at 60% (vessel would heave-to beyond that)
+        total = min(wave_loss + wind_loss + fouling_trim, 60.0)
 
         return round(total, 1)
 
@@ -153,6 +210,19 @@ class VesselSpeedCurve:
         )
         effective = base_speed * (1.0 - loss_pct / 100.0)
         return max(2.0, round(effective, 1))
+
+    def fuel_consumption_factor(self) -> float:
+        """
+        Fuel consumption multiplier due to fouling and trim.
+
+        Fouling increases fuel by ~1.5x the speed loss percentage.
+        Trim increases fuel by ~1.2x the trim loss percentage.
+
+        Returns a multiplier (e.g., 1.08 means 8% more fuel).
+        """
+        fouling_fuel = self._fouling_loss_pct * 1.5  # Fouling hurts fuel more than speed
+        trim_fuel = self._trim_loss_pct * 1.2
+        return round(1.0 + (fouling_fuel + trim_fuel) / 100.0, 3)
 
     def _interpolate_wave_loss(self, wave_height: float) -> float:
         """
@@ -235,6 +305,15 @@ class VesselSpeedCurve:
                 "wave_4m_pct": self._loss_4m,
                 "wave_6m_pct": self._loss_6m,
             },
+            "hull_fouling": {
+                "months_since_cleaning": self.hull_fouling_months,
+                "speed_loss_pct": self._fouling_loss_pct,
+            },
+            "trim_optimization": {
+                "trim_offset_m": self.trim_offset_m,
+                "speed_loss_pct": self._trim_loss_pct,
+            },
+            "fuel_consumption_factor": self.fuel_consumption_factor(),
         }
 
 
@@ -243,6 +322,16 @@ def get_speed_curve(
     dwt: float = 50000,
     loa: Optional[float] = None,
     beam: Optional[float] = None,
+    hull_fouling_months: int = 0,
+    trim_offset_m: float = 0.0,
 ) -> VesselSpeedCurve:
     """Factory function to create a speed curve for a given vessel class."""
-    return VesselSpeedCurve(vessel_type=vessel_type, dwt=dwt, loa=loa, beam=beam)
+    return VesselSpeedCurve(
+        vessel_type=vessel_type,
+        dwt=dwt,
+        loa=loa,
+        beam=beam,
+        hull_fouling_months=hull_fouling_months,
+        trim_offset_m=trim_offset_m,
+    )
+
