@@ -268,8 +268,11 @@ export default function LiveTrackingPanel({
         toast.error(`⚠️ ${data.overall_recommendation}`, { duration: 8000 });
       }
     } catch (err) {
-      console.error("Reroute failed:", err);
-      toast.error("Failed to analyze route weather");
+      console.warn("[LiveTracking] Reroute analysis unavailable:", err);
+      // Only show toast for manual checks, not during auto-refresh
+      if (!isLive) {
+        toast.error("Failed to analyze route weather");
+      }
     } finally {
       setIsLoading(false);
     }

@@ -214,28 +214,36 @@ export function VoyageMap({ waypoints, result, className, weatherPoints, alterna
     });
   };
 
-  // Create vessel ship icon
-  const createVesselIcon = (heading = 0) => {
+  // Create vessel ship icon with speed label
+  const createVesselIcon = (heading = 0, speed?: number) => {
     if (!L) return undefined;
     const pulseClass = isLiveTracking ? 'animation: pulse 2s infinite;' : '';
+    const speedLabel = speed !== undefined ? `
+      <div style="position:absolute;bottom:-14px;left:50%;transform:translateX(-50%);white-space:nowrap;
+        background:rgba(30,30,50,0.9);color:#60a5fa;font-size:9px;font-weight:700;font-family:monospace;
+        padding:1px 5px;border-radius:6px;border:1px solid rgba(59,130,246,0.4);
+        letter-spacing:0.3px;backdrop-filter:blur(4px);">
+        ${speed.toFixed(1)} kn
+      </div>` : '';
     const vesselHtml = `
-      <div style="position:relative;width:36px;height:36px;display:flex;align-items:center;justify-content:center;">
-        <div style="position:absolute;width:36px;height:36px;border-radius:50%;background:rgba(59,130,246,0.15);${pulseClass}"></div>
-        <div style="transform:rotate(${heading}deg);width:28px;height:28px;display:flex;align-items:center;justify-content:center;filter:drop-shadow(0 2px 4px rgba(0,0,0,0.5));">
-          <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="#3b82f6" stroke="white" stroke-width="1.5">
+      <div style="position:relative;width:44px;height:52px;display:flex;align-items:center;justify-content:center;">
+        <div style="position:absolute;top:2px;width:40px;height:40px;border-radius:50%;background:rgba(59,130,246,0.15);${pulseClass}"></div>
+        <div style="transform:rotate(${heading}deg);width:32px;height:32px;display:flex;align-items:center;justify-content:center;filter:drop-shadow(0 2px 6px rgba(0,0,0,0.6));margin-top:-4px;">
+          <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="#3b82f6" stroke="white" stroke-width="1.5">
             <path d="M2 21c.6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1 .6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1"/>
             <path d="M19.38 20A11.6 11.6 0 0 0 21 14l-9-4-9 4c0 2.9.94 5.34 2.81 7.76"/>
             <path d="M19 13V7a2 2 0 0 0-2-2H7a2 2 0 0 0-2 2v6"/>
             <path d="M12 2v3"/>
           </svg>
         </div>
+        ${speedLabel}
       </div>
     `;
     return L.divIcon({
       html: vesselHtml,
       className: "vessel-marker",
-      iconSize: [36, 36],
-      iconAnchor: [18, 18],
+      iconSize: [44, 52],
+      iconAnchor: [22, 26],
     });
   };
 
@@ -527,7 +535,7 @@ export function VoyageMap({ waypoints, result, className, weatherPoints, alterna
         {vesselPosition && (
           <Marker
             position={[vesselPosition.lat, vesselPosition.lon]}
-            icon={createVesselIcon(vesselPosition.heading)}
+            icon={createVesselIcon(vesselPosition.heading, vesselPosition.speed)}
           >
             <Popup>
               <div style={{ minWidth: '160px' }}>
