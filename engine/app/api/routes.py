@@ -16,6 +16,12 @@ from app.models.schemas import (
     MultiRouteForecastRequest,
     MultiRouteComparisonResponse,
     RouteWeatherSummary,
+    RerouteRequest,
+    RerouteResponse,
+    RerouteAdvisory,
+    FleetPositionUpdate,
+    FleetWeatherResponse,
+    FleetWeatherAlert,
 )
 from app.graph.pathfinder import OceanRouter
 from app.scheduler import SmartScheduler
@@ -889,6 +895,303 @@ def _get_data_source_label() -> str:
         return "NOAA_partial"
     else:
         return "synthetic_climatological"
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  DYNAMIC RE-ROUTING (Item 4)
+# ═══════════════════════════════════════════════════════════════════
+
+@router.post("/reroute", response_model=RerouteResponse)
+async def dynamic_reroute(request: RerouteRequest):
+    """
+    Mid-voyage dynamic re-routing analysis.
+
+    Given the vessel's CURRENT position (from AIS or manual update):
+    1. Computes weather from current position to each remaining waypoint
+    2. Generates advisories: proceed / slow_down / deviate / shelter
+    3. Compares new ETA vs original ETA
+    4. Returns actionable recommendation
+
+    This is what converts static pre-departure planning into
+    real-time operational intelligence.
+    """
+    from datetime import datetime, timezone, timedelta
+    import math
+    from app.models.speed_curves import get_speed_curve
+    from app.graph.cost import haversine_nm
+
+    store = ocean_router.forecast_store
+    if store is None or not store.is_ready:
+        raise HTTPException(
+            status_code=503,
+            detail="Forecast store not ready."
+        )
+
+    now = datetime.now(timezone.utc)
+    speed_curve = get_speed_curve(
+        vessel_type=request.vessel_type,
+        dwt=request.vessel_dwt,
+        loa=request.vessel_loa,
+        beam=request.vessel_beam,
+    )
+    base_speed = request.vessel_speed_knots
+
+    # Build waypoint list starting from current position
+    all_wps = [Waypoint(lat=request.current_lat, lon=request.current_lon)]
+    all_wps.extend(request.remaining_waypoints)
+
+    cumulative_hours = 0.0
+    cumulative_hours_calm = 0.0
+    cumulative_distance_nm = 0.0
+    advisories: list[RerouteAdvisory] = []
+    waypoint_forecasts: list[WaypointForecast] = []
+    worst_risk = "low"
+
+    for i, wp in enumerate(all_wps):
+        if i > 0:
+            prev = all_wps[i - 1]
+            leg_nm = haversine_nm(prev.lat, prev.lon, wp.lat, wp.lon)
+            calm_hours = leg_nm / base_speed if base_speed > 0 else 0
+            cumulative_hours_calm += calm_hours
+
+            # Apply weather speed penalty from previous waypoint
+            prev_wx = store.get_at_time(prev.lat, prev.lon, now + timedelta(hours=cumulative_hours))
+            prev_wave = prev_wx.get("wave_height_m", 0)
+            prev_wind = prev_wx.get("wind_speed_knots", 0)
+            eff_spd = speed_curve.effective_speed(base_speed, prev_wave, 0, 0, prev_wind)
+            leg_hours = leg_nm / eff_spd if eff_spd > 0 else 0
+            cumulative_hours += leg_hours
+            cumulative_distance_nm += leg_nm
+
+        # Get weather at this waypoint at ETA
+        eta = now + timedelta(hours=cumulative_hours)
+        wx = store.get_at_time(wp.lat, wp.lon, eta)
+        if "error" in wx:
+            continue
+
+        wave_h = wx.get("wave_height_m", 0)
+        wind_kn = wx.get("wind_speed_knots", 0)
+        bf = wx.get("beaufort", 0)
+
+        # Navigability assessment
+        if wave_h >= 6.0:
+            nav = "dangerous"
+        elif wave_h >= 4.0 or wind_kn >= 34:
+            nav = "restricted"
+        elif wave_h >= 2.5 or wind_kn >= 22:
+            nav = "moderate"
+        else:
+            nav = "open"
+
+        # Generate advisories based on conditions
+        if wave_h >= 7.0 or wind_kn >= 48:
+            advisories.append(RerouteAdvisory(
+                type="shelter",
+                severity="critical",
+                message=f"WP{i}: Extreme conditions ({wave_h:.1f}m waves, BF{bf}). Seek shelter immediately.",
+                affected_waypoint_idx=i,
+                wave_height_m=wave_h,
+                wind_speed_knots=wind_kn,
+                beaufort=bf,
+            ))
+            worst_risk = "extreme"
+        elif wave_h >= 5.0 or wind_kn >= 40:
+            advisories.append(RerouteAdvisory(
+                type="deviate",
+                severity="critical",
+                message=f"WP{i}: Severe weather ({wave_h:.1f}m waves, {wind_kn:.0f}kn). Consider deviation.",
+                affected_waypoint_idx=i,
+                wave_height_m=wave_h,
+                wind_speed_knots=wind_kn,
+                beaufort=bf,
+            ))
+            if worst_risk != "extreme":
+                worst_risk = "high"
+        elif wave_h >= 3.0 or wind_kn >= 28:
+            advisories.append(RerouteAdvisory(
+                type="slow_down",
+                severity="warning",
+                message=f"WP{i}: Heavy weather ahead ({wave_h:.1f}m, BF{bf}). Reduce speed.",
+                affected_waypoint_idx=i,
+                wave_height_m=wave_h,
+                wind_speed_knots=wind_kn,
+                beaufort=bf,
+            ))
+            if worst_risk not in ("extreme", "high"):
+                worst_risk = "moderate"
+
+        wpf = WaypointForecast(
+            lat=wp.lat, lon=wp.lon,
+            eta=eta.isoformat(),
+            hours_from_departure=round(cumulative_hours, 1),
+            distance_from_departure_nm=round(cumulative_distance_nm, 1),
+            wave_height_m=wave_h,
+            wind_speed_knots=wind_kn,
+            beaufort=bf,
+            pressure_hpa=wx.get("pressure_hpa", 0),
+            swell_height_m=wx.get("swell_height_m", 0),
+            navigability=nav,
+        )
+        waypoint_forecasts.append(wpf)
+
+    # Overall recommendation
+    weather_delay = max(0, cumulative_hours - cumulative_hours_calm)
+    if worst_risk == "extreme":
+        recommendation = "⛔ SEEK SHELTER — Extreme conditions on route"
+    elif worst_risk == "high":
+        recommendation = "⚠️ CONSIDER DEVIATION — Severe weather on route segments"
+    elif worst_risk == "moderate":
+        recommendation = "🔶 REDUCE SPEED — Heavy weather expected, delay estimated"
+    elif weather_delay > 2:
+        recommendation = f"✅ PROCEED — Minor weather delay (+{weather_delay:.1f}h)"
+    else:
+        recommendation = "✅ PROCEED AS PLANNED — Conditions favorable"
+
+    # If no advisories, add a "proceed" one
+    if not advisories:
+        advisories.append(RerouteAdvisory(
+            type="proceed",
+            severity="info",
+            message="All remaining waypoints show favorable conditions.",
+        ))
+
+    return RerouteResponse(
+        success=True,
+        current_position={"lat": request.current_lat, "lon": request.current_lon},
+        remaining_distance_nm=round(cumulative_distance_nm, 1),
+        original_hours_remaining=round(cumulative_hours_calm, 1),
+        weather_adjusted_hours=round(cumulative_hours, 1),
+        new_delay_hours=round(weather_delay, 1),
+        advisories=advisories,
+        overall_recommendation=recommendation,
+        risk_level=worst_risk,
+        waypoint_forecasts=waypoint_forecasts,
+        source="ECMWF+NOAA",
+        cycle=store.cycle_timestamp.isoformat() if store.cycle_timestamp else None,
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  FLEET WEATHER MONITORING (Item 5)
+# ═══════════════════════════════════════════════════════════════════
+
+@router.post("/fleet/weather", response_model=FleetWeatherResponse)
+async def fleet_weather_check(vessels: list[FleetPositionUpdate]):
+    """
+    Fleet-wide weather monitoring.
+
+    Accepts a list of vessel positions (from AIS or manual input).
+    Returns current weather at each vessel + danger alerts.
+
+    This replaces the manual "check weather for each vessel" workflow
+    with automated fleet-wide monitoring.
+    """
+    store = ocean_router.forecast_store
+    if store is None or not store.is_ready:
+        raise HTTPException(
+            status_code=503,
+            detail="Forecast store not ready."
+        )
+
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc)
+    vessel_snapshots = []
+    alerts: list[FleetWeatherAlert] = []
+    vessels_at_risk = 0
+
+    for v in vessels:
+        wx = store.get_at_time(v.lat, v.lon, now)
+        if "error" in wx:
+            continue
+
+        wave_h = wx.get("wave_height_m", 0)
+        wind_kn = wx.get("wind_speed_knots", 0)
+        bf = wx.get("beaufort", 0)
+        pressure = wx.get("pressure_hpa", 0)
+
+        # Navigability
+        if wave_h >= 6.0:
+            nav = "dangerous"
+        elif wave_h >= 4.0 or wind_kn >= 34:
+            nav = "restricted"
+        elif wave_h >= 2.5 or wind_kn >= 22:
+            nav = "moderate"
+        else:
+            nav = "open"
+
+        snapshot = {
+            "vessel_id": v.vessel_id,
+            "vessel_name": v.vessel_name,
+            "lat": v.lat,
+            "lon": v.lon,
+            "wave_height_m": round(wave_h, 1),
+            "wind_speed_knots": round(wind_kn, 1),
+            "beaufort": bf,
+            "pressure_hpa": round(pressure, 1),
+            "navigability": nav,
+            "checked_at": now.isoformat(),
+        }
+        vessel_snapshots.append(snapshot)
+
+        # Generate alerts for dangerous conditions
+        is_at_risk = False
+        if wave_h >= 6.0:
+            alerts.append(FleetWeatherAlert(
+                vessel_id=v.vessel_id,
+                vessel_name=v.vessel_name,
+                lat=v.lat, lon=v.lon,
+                alert_type="high_waves",
+                severity="critical",
+                message=f"Dangerous seas: {wave_h:.1f}m waves, BF{bf}",
+                wave_height_m=wave_h,
+                wind_speed_knots=wind_kn,
+                beaufort=bf,
+                navigability=nav,
+            ))
+            is_at_risk = True
+        elif wave_h >= 4.0 or wind_kn >= 34:
+            alerts.append(FleetWeatherAlert(
+                vessel_id=v.vessel_id,
+                vessel_name=v.vessel_name,
+                lat=v.lat, lon=v.lon,
+                alert_type="storm",
+                severity="warning",
+                message=f"Storm warning: {wave_h:.1f}m waves, {wind_kn:.0f}kn wind",
+                wave_height_m=wave_h,
+                wind_speed_knots=wind_kn,
+                beaufort=bf,
+                navigability=nav,
+            ))
+            is_at_risk = True
+
+        if pressure < 990:
+            alerts.append(FleetWeatherAlert(
+                vessel_id=v.vessel_id,
+                vessel_name=v.vessel_name,
+                lat=v.lat, lon=v.lon,
+                alert_type="storm",
+                severity="warning",
+                message=f"Low pressure system: {pressure:.0f} hPa — potential cyclone",
+                wave_height_m=wave_h,
+                wind_speed_knots=wind_kn,
+                beaufort=bf,
+                navigability=nav,
+            ))
+            is_at_risk = True
+
+        if is_at_risk:
+            vessels_at_risk += 1
+
+    return FleetWeatherResponse(
+        success=True,
+        vessels=vessel_snapshots,
+        alerts=alerts,
+        total_vessels=len(vessels),
+        vessels_at_risk=vessels_at_risk,
+        source="ECMWF+NOAA",
+        cycle=store.cycle_timestamp.isoformat() if store.cycle_timestamp else None,
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════

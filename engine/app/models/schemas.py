@@ -253,3 +253,86 @@ class MultiRouteComparisonResponse(BaseModel):
     recommendation_reason: str = ""
     source: str = "ECMWF+NOAA"
     cycle: Optional[str] = None
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  DYNAMIC RE-ROUTING (Item 4)
+# ═══════════════════════════════════════════════════════════════════
+
+class RerouteRequest(BaseModel):
+    """Request body for mid-voyage dynamic re-routing."""
+    current_lat: float = Field(..., ge=-90, le=90, description="Current vessel latitude")
+    current_lon: float = Field(..., ge=-180, le=180, description="Current vessel longitude")
+    remaining_waypoints: list[Waypoint] = Field(..., description="Remaining waypoints to destination")
+    vessel_speed_knots: float = Field(default=12.5, gt=0)
+    vessel_type: str = "BULK_CARRIER"
+    vessel_dwt: float = 50000
+    vessel_loa: Optional[float] = None
+    vessel_beam: Optional[float] = None
+    original_eta: Optional[str] = None  # ISO timestamp of original ETA
+
+class RerouteAdvisory(BaseModel):
+    """A single re-routing advisory."""
+    type: str = ""       # "proceed" | "slow_down" | "deviate" | "shelter"
+    severity: str = ""   # "info" | "warning" | "critical"
+    message: str = ""
+    affected_waypoint_idx: int = 0
+    wave_height_m: float = 0
+    wind_speed_knots: float = 0
+    beaufort: int = 0
+
+class RerouteResponse(BaseModel):
+    """Response body for dynamic re-routing analysis."""
+    success: bool = True
+    current_position: dict = Field(default_factory=dict)
+    remaining_distance_nm: float = 0
+    original_hours_remaining: float = 0
+    weather_adjusted_hours: float = 0
+    new_delay_hours: float = 0
+    advisories: list[RerouteAdvisory] = Field(default_factory=list)
+    overall_recommendation: str = ""  # "Proceed as planned" | "Consider speed reduction" | etc.
+    risk_level: str = "low"
+    waypoint_forecasts: list[WaypointForecast] = Field(default_factory=list)
+    source: str = "ECMWF+NOAA"
+    cycle: Optional[str] = None
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  FLEET WEATHER MONITORING (Item 5)
+# ═══════════════════════════════════════════════════════════════════
+
+class FleetPositionUpdate(BaseModel):
+    """A single vessel position update for fleet monitoring."""
+    vessel_id: str
+    vessel_name: str = ""
+    mmsi: str = ""
+    lat: float = Field(..., ge=-90, le=90)
+    lon: float = Field(..., ge=-180, le=180)
+    speed_knots: float = 0
+    heading: float = 0
+    destination: str = ""
+
+class FleetWeatherAlert(BaseModel):
+    """Weather alert for a vessel in the fleet."""
+    vessel_id: str
+    vessel_name: str = ""
+    lat: float = 0
+    lon: float = 0
+    alert_type: str = ""      # "storm" | "high_waves" | "ice" | "restricted_nav"
+    severity: str = "warning"  # "info" | "warning" | "critical"
+    message: str = ""
+    wave_height_m: float = 0
+    wind_speed_knots: float = 0
+    beaufort: int = 0
+    navigability: str = "open"
+
+class FleetWeatherResponse(BaseModel):
+    """Response body for fleet-wide weather monitoring."""
+    success: bool = True
+    vessels: list[dict] = Field(default_factory=list)  # Per-vessel weather snapshots
+    alerts: list[FleetWeatherAlert] = Field(default_factory=list)
+    total_vessels: int = 0
+    vessels_at_risk: int = 0
+    source: str = "ECMWF+NOAA"
+    cycle: Optional[str] = None
+
