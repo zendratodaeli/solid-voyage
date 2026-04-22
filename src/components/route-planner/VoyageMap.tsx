@@ -125,6 +125,8 @@ interface VoyageMapProps {
   vesselTrail?: TrailPoint[];
   /** Whether live tracking is active (enables pulsing animation) */
   isLiveTracking?: boolean;
+  /** Nearby vessels for radar display (gray icons) */
+  nearbyVessels?: VesselMapPosition[];
 }
 
 /** Route variant for multi-route map overlay */
@@ -157,7 +159,7 @@ const TRAIL_COLORS = {
   "off-route": "#ef4444",       // Red
 } as const;
 
-export function VoyageMap({ waypoints, result, className, weatherPoints, alternativeRoutes, onMapClick, onMapRightClick, clickModeLabel, vesselPosition, vesselTrail, isLiveTracking }: VoyageMapProps) {
+export function VoyageMap({ waypoints, result, className, weatherPoints, alternativeRoutes, onMapClick, onMapRightClick, clickModeLabel, vesselPosition, vesselTrail, isLiveTracking, nearbyVessels }: VoyageMapProps) {
   const [L, setL] = useState<typeof import("leaflet") | null>(null);
   const [mapReady, setMapReady] = useState(false);
 
@@ -247,7 +249,35 @@ export function VoyageMap({ waypoints, result, className, weatherPoints, alterna
     });
   };
 
-  // Build color-segmented trail from trail points
+  // Create nearby vessel icon (smaller, gray)
+  const createNearbyIcon = (speed?: number) => {
+    if (!L) return undefined;
+    const speedText = speed !== undefined ? `${speed.toFixed(1)} kn` : "";
+    const html = `
+      <div style="position:relative;width:28px;height:34px;display:flex;align-items:center;justify-content:center;">
+        <div style="width:22px;height:22px;display:flex;align-items:center;justify-content:center;filter:drop-shadow(0 1px 3px rgba(0,0,0,0.4));">
+          <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="#6b7280" stroke="#e5e7eb" stroke-width="1.5">
+            <path d="M2 21c.6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1 .6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1"/>
+            <path d="M19.38 20A11.6 11.6 0 0 0 21 14l-9-4-9 4c0 2.9.94 5.34 2.81 7.76"/>
+            <path d="M19 13V7a2 2 0 0 0-2-2H7a2 2 0 0 0-2 2v6"/>
+            <path d="M12 2v3"/>
+          </svg>
+        </div>
+        ${speedText ? `<div style="position:absolute;bottom:-10px;left:50%;transform:translateX(-50%);white-space:nowrap;
+          background:rgba(40,40,60,0.85);color:#9ca3af;font-size:8px;font-weight:600;font-family:monospace;
+          padding:0px 3px;border-radius:4px;letter-spacing:0.2px;">
+          ${speedText}
+        </div>` : ""}
+      </div>
+    `;
+    return L.divIcon({
+      html,
+      className: "nearby-vessel-marker",
+      iconSize: [28, 34],
+      iconAnchor: [14, 17],
+    });
+  };
+
   const trailSegments = useMemo(() => {
     if (!vesselTrail || vesselTrail.length < 2) return [];
     const segments: Array<{ positions: [number, number][]; status: TrailPoint["status"]; color: string }> = [];
@@ -565,6 +595,26 @@ export function VoyageMap({ waypoints, result, className, weatherPoints, alterna
             </Tooltip>
           </Marker>
         )}
+
+        {/* Nearby Vessel Icons (gray, smaller) */}
+        {nearbyVessels?.map((nv, i) => (
+          <Marker
+            key={`nearby-${i}`}
+            position={[nv.lat, nv.lon]}
+            icon={createNearbyIcon(nv.speed)}
+          >
+            <Tooltip direction="top" offset={[0, -16]}>
+              <div style={{ fontSize: '11px', fontWeight: 500 }}>
+                {nv.name || "Unknown Vessel"}
+              </div>
+              {nv.speed !== undefined && (
+                <div style={{ fontSize: '10px', color: '#999' }}>
+                  {nv.speed.toFixed(1)} kn
+                </div>
+              )}
+            </Tooltip>
+          </Marker>
+        ))}
       </MaritimeMap>
     </div>
   );

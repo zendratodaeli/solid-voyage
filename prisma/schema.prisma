@@ -77,6 +77,7 @@ model Organization {
   updatedAt DateTime @updatedAt
 
   theme     OrgTheme?
+  liveVoyageSessions LiveVoyageSession[]
 }
 
 model OrgTheme {
@@ -1339,4 +1340,123 @@ model MaritimeIntelligence {
   // ─── Audit ─────────────────────────────────────────────────
   lastUpdatedAt           DateTime @updatedAt
   updatedBy               String?
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// LIVE VOYAGE MONITORING
+// Real-time vessel tracking with route adherence, weather, and nearby traffic
+// ═══════════════════════════════════════════════════════════════════
+
+model LiveVoyageSession {
+  id              String   @id @default(cuid())
+  organizationId  String
+  organization    Organization @relation(fields: [organizationId], references: [id])
+  createdBy       String?  // Clerk user ID who started monitoring
+
+  // Vessel info (snapshot at time of creation)
+  vesselId        String?
+  vesselName      String
+  vesselType      String   @default("BULK_CARRIER")
+  vesselDwt       Float    @default(50000)
+  vesselSpeed     Float    @default(12.5)
+  vesselMmsi      String?
+  vesselImo       String?
+
+  // Route info
+  originPort      String
+  destinationPort String
+  routeDistanceNm Float    @default(0)
+  etd             DateTime?
+
+  // Full data snapshots (JSON for flexibility)
+  plannedRouteJson   Json?  // Full route coordinates + legs geometry
+  weatherDataJson    Json?  // Weather analysis at route start
+  complianceJson     Json?  // ECA/HRA compliance data
+  routeIntelJson     Json?  // Route intelligence (canal tolls, war risk, etc.)
+  aiRecommendation   Json?  // AI route recommendation
+  waypointsJson      Json?  // Waypoint configuration (ports, speeds, conditions)
+
+  // Tracking state
+  status          String   @default("active") // active | completed | paused | cancelled
+  startedAt       DateTime @default(now())
+  completedAt     DateTime?
+  pausedAt        DateTime?
+
+  // Aggregated stats (updated during tracking)
+  totalTrackPoints Int     @default(0)
+  maxDeviationNm   Float   @default(0)
+  avgSpeedKn       Float?
+
+  trackPoints     VoyageTrackPoint[]
+  nearbyObjects   NearbyObject[]
+
+  @@index([organizationId, status])
+  @@index([vesselName])
+  @@index([status, startedAt])
+}
+
+model VoyageTrackPoint {
+  id              String   @id @default(cuid())
+  sessionId       String
+  session         LiveVoyageSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  timestamp       DateTime @default(now())
+  lat             Float
+  lon             Float
+  speed           Float?   // Speed at this point (knots)
+  heading         Float?   // Heading in degrees
+
+  // Route adherence
+  deviationNm     Float    @default(0) // Distance from planned route
+  deviationStatus String   @default("on-route") // on-route | minor-deviation | off-route
+
+  // Weather at this point (from engine or forecast)
+  waveHeightM     Float?
+  windSpeedKn     Float?
+  beaufort        Int?
+  pressure        Float?   // hPa
+  navigability    String?  // open | moderate | restricted | dangerous
+
+  // Advisory at this point (if any)
+  advisoryType    String?  // proceed | slow_down | deviate | shelter
+  advisoryMessage String?
+
+  @@index([sessionId, timestamp])
+  @@index([sessionId, deviationStatus])
+}
+
+model NearbyObject {
+  id              String   @id @default(cuid())
+  sessionId       String
+  session         LiveVoyageSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  timestamp       DateTime @default(now())
+
+  // Object details
+  objectType      String   @default("vessel") // vessel | tanker | tug | buoy | platform | fishing
+  name            String?
+  mmsi            String?
+  imo             String?
+  callSign        String?
+  flag            String?
+
+  // Position
+  lat             Float
+  lon             Float
+  speed           Float?   // Speed in knots
+  heading         Float?   // Heading in degrees
+  course          Float?   // Course over ground
+
+  // Relative to our vessel
+  distanceNm      Float    // Distance from our vessel
+  bearing         Float?   // Bearing from our vessel (degrees)
+
+  // Ship details (if available)
+  shipType        String?  // Cargo, Tanker, Passenger, etc.
+  destination     String?
+  draught         Float?   // Reported draught (meters)
+  length          Float?   // Ship length (meters)
+
+  @@index([sessionId, timestamp])
+  @@index([sessionId, distanceNm])
 }

@@ -3766,6 +3766,12 @@ export function NavApiMultiRoutePlanner({
                     onVesselPositionChange={setVesselMapPosition}
                     onTrailUpdate={setVesselTrail}
                     onLiveStateChange={setIsLiveTracking}
+                    vesselId={selectedVessel?.id}
+                    originPort={waypoints[0]?.port?.displayName || ""}
+                    destinationPort={waypoints[waypoints.length - 1]?.port?.displayName || ""}
+                    routeDistanceNm={result?.summary?.totalDistanceNm}
+                    routeResultJson={result}
+                    orgSlug={orgSlug}
                   />
                 </div>
               )}

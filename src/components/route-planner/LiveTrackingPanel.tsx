@@ -37,6 +37,14 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
 
 // ═══════════════════════════════════════════════════════════════════
 //  TYPES
@@ -110,6 +118,31 @@ interface LiveTrackingPanelProps {
   onTrailUpdate?: (trail: TrailPoint[]) => void;
   /** Callback to notify parent of live tracking state */
   onLiveStateChange?: (isLive: boolean) => void;
+  // ── Save Route Props ──
+  /** Vessel ID for DB reference */
+  vesselId?: string;
+  /** Vessel MMSI for DB */
+  vesselMmsi?: string;
+  /** Vessel IMO for DB */
+  vesselImo?: string;
+  /** Origin port name */
+  originPort?: string;
+  /** Destination port name */
+  destinationPort?: string;
+  /** Route distance NM */
+  routeDistanceNm?: number;
+  /** Full route result JSON (for DB snapshot) */
+  routeResultJson?: unknown;
+  /** Weather data JSON */
+  weatherDataJson?: unknown;
+  /** Compliance data JSON */
+  complianceJson?: unknown;
+  /** Route intelligence JSON */
+  routeIntelJson?: unknown;
+  /** Organization slug for URL building */
+  orgSlug?: string;
+  /** Callback to reset route planner after save */
+  onResetPlanner?: () => void;
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -156,6 +189,18 @@ export default function LiveTrackingPanel({
   onVesselPositionChange,
   onTrailUpdate,
   onLiveStateChange,
+  vesselId,
+  vesselMmsi,
+  vesselImo,
+  originPort,
+  destinationPort,
+  routeDistanceNm,
+  routeResultJson,
+  weatherDataJson,
+  complianceJson,
+  routeIntelJson,
+  orgSlug,
+  onResetPlanner,
 }: LiveTrackingPanelProps) {
   // State
   const [isLive, setIsLive] = useState(false);
@@ -170,6 +215,8 @@ export default function LiveTrackingPanel({
   const [positionTrail, setPositionTrail] = useState<TrailPoint[]>([]);
   const mockIndexRef = useRef(0);
   const mockIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [showSaveDialog, setShowSaveDialog] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
 
   // ── Haversine distance (nm) ──
   const haversineNm = useCallback((lat1: number, lon1: number, lat2: number, lon2: number): number => {
@@ -358,6 +405,7 @@ export default function LiveTrackingPanel({
   const risk = rerouteData ? RISK_CONFIG[rerouteData.risk_level] : null;
 
   return (
+    <>
     <Card className="border-[hsl(var(--border))] bg-[hsl(var(--card))]">
       <CardHeader className="pb-3">
         <div className="flex items-center justify-between">
@@ -381,7 +429,13 @@ export default function LiveTrackingPanel({
               size="sm"
               variant={isLive ? "destructive" : "default"}
               className="h-7 text-xs gap-1.5"
-              onClick={() => setIsLive(!isLive)}
+              onClick={() => {
+                if (isLive) {
+                  setIsLive(false);
+                } else {
+                  setShowSaveDialog(true);
+                }
+              }}
               disabled={!hasValidCoords || remainingWaypoints.length === 0}
             >
               <Power className="h-3.5 w-3.5" />
@@ -599,5 +653,110 @@ export default function LiveTrackingPanel({
         )}
       </CardContent>
     </Card>
+
+    {/* ── Save & Start Dialog ── */}
+    <Dialog open={showSaveDialog} onOpenChange={setShowSaveDialog}>
+      <DialogContent className="sm:max-w-[420px]">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Radio className="h-5 w-5 text-blue-500" />
+            Start Live Tracking
+          </DialogTitle>
+          <DialogDescription>
+            Save route for continuous monitoring, or start tracking without saving.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-3 py-2">
+          <div className="bg-muted/50 rounded-lg p-3 space-y-1.5">
+            <div className="flex justify-between text-sm">
+              <span className="text-muted-foreground">Route</span>
+              <span className="font-medium">{originPort || "Origin"} → {destinationPort || "Destination"}</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-muted-foreground">Vessel</span>
+              <span className="font-medium">{vesselName}</span>
+            </div>
+            {routeDistanceNm ? (
+              <div className="flex justify-between text-sm">
+                <span className="text-muted-foreground">Distance</span>
+                <span className="font-mono">{Math.round(routeDistanceNm).toLocaleString()} NM</span>
+              </div>
+            ) : null}
+          </div>
+
+          <div className="text-[11px] text-muted-foreground">
+            <strong>Saved routes</strong> are stored to the database and can be reviewed later for voyage playback, captain evaluation, and demurrage disputes.
+          </div>
+        </div>
+
+        <DialogFooter className="flex gap-2 sm:gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            className="flex-1"
+            onClick={() => {
+              setShowSaveDialog(false);
+              setIsLive(true);
+            }}
+          >
+            Start Without Saving
+          </Button>
+          <Button
+            size="sm"
+            className="flex-1 gap-1.5"
+            disabled={isSaving}
+            onClick={async () => {
+              setIsSaving(true);
+              try {
+                const res = await fetch("/api/live-voyages", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    vesselId,
+                    vesselName,
+                    vesselType,
+                    vesselDwt,
+                    vesselSpeed,
+                    vesselMmsi,
+                    vesselImo,
+                    originPort: originPort || "Unknown",
+                    destinationPort: destinationPort || "Unknown",
+                    routeDistanceNm: routeDistanceNm || 0,
+                    plannedRouteJson: routeResultJson,
+                    weatherDataJson,
+                    complianceJson,
+                    routeIntelJson,
+                  }),
+                });
+
+                if (!res.ok) throw new Error("Failed to save");
+                const data = await res.json();
+
+                if (data.success && data.data?.id) {
+                  toast.success("Route saved! Opening monitoring tab...");
+                  // Open monitoring page in new tab
+                  const monitorUrl = `/${orgSlug || ""}/live-tracking/${data.data.id}`;
+                  window.open(monitorUrl, "_blank");
+                  // Reset planner for new route
+                  onResetPlanner?.();
+                }
+              } catch (err) {
+                console.error("Save failed:", err);
+                toast.error("Failed to save route");
+                // Start without saving anyway
+                setIsLive(true);
+              } finally {
+                setIsSaving(false);
+                setShowSaveDialog(false);
+              }
+            }}
+          >
+            {isSaving ? "Saving..." : "💾 Save & Start"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+    </>
   );
 }
