@@ -94,34 +94,35 @@ export default function MapWeatherHover() {
     try {
       const roundedLat = Math.round(lat * 2) / 2;
       const roundedLon = Math.round(lon * 2) / 2;
-      // Use NOAA engine /conditions endpoint
-      const url = `/api/weather-routing/conditions?lat=${roundedLat}&lon=${roundedLon}`;
+
+      // Use Open-Meteo Marine API directly — it correctly returns 400 for land
+      // (the engine /conditions endpoint interpolates from nearest ocean cell, giving fake wave data on land)
+      const url = `https://marine-api.open-meteo.com/v1/marine?latitude=${roundedLat}&longitude=${roundedLon}&current=wave_height,swell_wave_height&daily=wave_height_max&timezone=auto&forecast_days=1`;
 
       const res = await fetch(url, { signal: controller.signal });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
-      const json = await res.json();
-      const data = json.data; // proxy wraps in { success, data: {...} }
-
-      if (!data) throw new Error("No data from engine");
-
-      const waveHeight = data.wave_height_m ?? 0;
-      const swellHeight = 0; // /conditions doesn't separate swell — use wave_height_m
-      const seaTemp = data.sea_surface_temp_c ?? 0;
-
-      // Skip land areas — engine interpolates from nearest ocean grid cell
-      // which gives misleading wave data on inland locations
-      if (isLikelyLand(waveHeight, seaTemp, roundedLat) || data.navigability === 0) {
+      if (!res.ok) {
+        // Open-Meteo returns 400 for land coordinates — this is correct behavior
         setTooltip(null);
         return;
       }
+
+      const json = await res.json();
+      const current = json.current;
+
+      if (!current) {
+        setTooltip(null);
+        return;
+      }
+
+      const waveHeight = current.wave_height ?? 0;
+      const swellHeight = current.swell_wave_height ?? 0;
 
       const result: WeatherHoverData = {
         lat: roundedLat,
         lon: roundedLon,
         waveHeight,
         swellHeight,
-        seaTemp,
+        seaTemp: 0, // Marine API doesn't return SST in free tier
         severity: classifySeverity(waveHeight),
       };
 
@@ -132,8 +133,9 @@ export default function MapWeatherHover() {
       if (!controller.signal.aborted) {
         setTooltip({ x: containerX, y: containerY, data: result });
       }
-    } catch (err: any) {
-      if (err?.name !== "AbortError") {
+    } catch (err: unknown) {
+      const error = err as { name?: string };
+      if (error?.name !== "AbortError") {
         // Silent fail — land areas or API errors just hide tooltip
         setTooltip(null);
       }
@@ -221,9 +223,11 @@ export default function MapWeatherHover() {
                 Swell: {data.swellHeight.toFixed(1)}m
               </div>
             )}
-            <div style={{ fontSize: 10, color: "#64748b", marginTop: 3 }}>
-              SST: {data.seaTemp.toFixed(1)}°C
-            </div>
+            {data.seaTemp > 0 && (
+              <div style={{ fontSize: 10, color: "#64748b", marginTop: 3 }}>
+                SST: {data.seaTemp.toFixed(1)}°C
+              </div>
+            )}
           </>
         ) : null}
       </div>

@@ -43,45 +43,45 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const session = await prisma.$transaction(async (tx) => {
-      // Ensure Organization record exists (may not if webhook hasn't fired)
-      await tx.organization.upsert({
-        where: { id: orgId },
-        create: { id: orgId, name: "Organization" },
-        update: {},
-      });
+    // Ensure Organization record exists (may not if webhook hasn't fired)
+    // Note: PrismaNeon doesn't support interactive transactions, use sequential ops
+    await prisma.organization.upsert({
+      where: { id: orgId },
+      create: { id: orgId, name: "Organization" },
+      update: {},
+    });
 
-      return tx.liveVoyageSession.create({
-        data: {
-          organizationId: orgId,
-          createdBy: userId,
-          vesselId,
-          vesselName,
-          vesselType: vesselType || "BULK_CARRIER",
-          vesselDwt: vesselDwt || 50000,
-          vesselSpeed: vesselSpeed || 12.5,
-          vesselMmsi: vesselMmsi || null,
-          vesselImo: vesselImo || null,
-          originPort,
-          destinationPort,
-          routeDistanceNm: routeDistanceNm || 0,
-          etd: etd ? new Date(etd) : null,
-          plannedRouteJson: plannedRouteJson || null,
-          weatherDataJson: weatherDataJson || null,
-          complianceJson: complianceJson || null,
-          routeIntelJson: routeIntelJson || null,
-          aiRecommendation: aiRecommendation || null,
-          waypointsJson: waypointsJson || null,
-          status: "active",
-        },
-      });
+    const session = await prisma.liveVoyageSession.create({
+      data: {
+        organizationId: orgId,
+        createdBy: userId,
+        vesselId: vesselId || null,
+        vesselName,
+        vesselType: vesselType || "BULK_CARRIER",
+        vesselDwt: vesselDwt ? Number(vesselDwt) : 50000,
+        vesselSpeed: vesselSpeed ? Number(vesselSpeed) : 12.5,
+        vesselMmsi: vesselMmsi || null,
+        vesselImo: vesselImo || null,
+        originPort,
+        destinationPort,
+        routeDistanceNm: routeDistanceNm ? Number(routeDistanceNm) : 0,
+        etd: etd ? new Date(etd) : null,
+        plannedRouteJson: plannedRouteJson ?? undefined,
+        weatherDataJson: weatherDataJson ?? undefined,
+        complianceJson: complianceJson ?? undefined,
+        routeIntelJson: routeIntelJson ?? undefined,
+        aiRecommendation: aiRecommendation ?? undefined,
+        waypointsJson: waypointsJson ?? undefined,
+        status: "active",
+      },
     });
 
     return NextResponse.json({ success: true, data: session });
-  } catch (error) {
-    console.error("[LIVE_VOYAGES] POST error:", error);
+  } catch (error: unknown) {
+    const errMsg = error instanceof Error ? error.message : String(error);
+    console.error("[LIVE_VOYAGES] POST error:", errMsg);
     return NextResponse.json(
-      { error: "Failed to create live voyage session" },
+      { error: `Failed to create live voyage session: ${errMsg}` },
       { status: 500 }
     );
   }
