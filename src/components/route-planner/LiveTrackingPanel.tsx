@@ -29,6 +29,7 @@ import {
   ChevronDown,
   ChevronUp,
   Zap,
+  Users,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -143,6 +144,8 @@ interface LiveTrackingPanelProps {
   orgSlug?: string;
   /** Callback to reset route planner after save */
   onResetPlanner?: () => void;
+  /** Callback to send nearby vessels to map */
+  onNearbyVesselsUpdate?: (vessels: Array<{ lat: number; lon: number; name: string; speed: number; heading?: number }>) => void;
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -201,6 +204,7 @@ export default function LiveTrackingPanel({
   routeIntelJson,
   orgSlug,
   onResetPlanner,
+  onNearbyVesselsUpdate,
 }: LiveTrackingPanelProps) {
   // State
   const [isLive, setIsLive] = useState(false);
@@ -217,6 +221,8 @@ export default function LiveTrackingPanel({
   const mockIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [showSaveDialog, setShowSaveDialog] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [nearbyVessels, setNearbyVessels] = useState<Array<{ name: string; shipType: string; speed: number; distanceNm: number; flag?: string }>>([]);
+  const nearbyIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // ── Haversine distance (nm) ──
   const haversineNm = useCallback((lat1: number, lon1: number, lat2: number, lon2: number): number => {
@@ -388,6 +394,43 @@ export default function LiveTrackingPanel({
       mockIndexRef.current = 0;
     }
   }, [isLive, onLiveStateChange]);
+
+  // ── Nearby Vessel Radar (20 NM) ──
+  // Fetches nearby vessels every 15s during live tracking
+  useEffect(() => {
+    if (!isLive) {
+      if (nearbyIntervalRef.current) clearInterval(nearbyIntervalRef.current);
+      setNearbyVessels([]);
+      onNearbyVesselsUpdate?.([]);
+      return;
+    }
+
+    const fetchNearby = async () => {
+      const lat = parseCoord(currentLat);
+      const lon = parseCoord(currentLon);
+      if (isNaN(lat) || isNaN(lon)) return;
+      try {
+        const res = await fetch(`/api/ais/area?lat=${lat}&lon=${lon}&radius=20`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.success && data.data) {
+            setNearbyVessels(data.data);
+            onNearbyVesselsUpdate?.(data.data.map((v: { lat: number; lon: number; name: string; speed: number; heading?: number }) => ({
+              lat: v.lat, lon: v.lon, name: v.name, speed: v.speed, heading: v.heading,
+            })));
+          }
+        }
+      } catch { /* ignore */ }
+    };
+
+    // Fetch immediately, then every 15s
+    fetchNearby();
+    nearbyIntervalRef.current = setInterval(fetchNearby, 15000);
+
+    return () => {
+      if (nearbyIntervalRef.current) clearInterval(nearbyIntervalRef.current);
+    };
+  }, [isLive]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Format time ──
   const formatEta = (isoStr: string) => {
@@ -648,6 +691,40 @@ export default function LiveTrackingPanel({
                   Auto-refresh: 15 min
                 </span>
               )}
+            </div>
+          </div>
+        )}
+
+        {/* ── Nearby Traffic Radar ── */}
+        {isLive && nearbyVessels.length > 0 && (
+          <div className="space-y-2 pt-2 border-t border-[hsl(var(--border))]/30">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-medium text-muted-foreground flex items-center gap-1.5">
+                <Users className="h-3.5 w-3.5" />
+                Nearby Traffic
+              </span>
+              <Badge variant="outline" className="text-[9px] px-1.5">
+                {nearbyVessels.length} vessels · 20 NM
+              </Badge>
+            </div>
+            <div className="space-y-1 max-h-[150px] overflow-y-auto">
+              {nearbyVessels.slice(0, 8).map((v, i) => (
+                <div
+                  key={i}
+                  className="flex items-center justify-between text-[10px] px-2 py-1.5 rounded bg-muted/30 hover:bg-muted/50 transition-colors"
+                >
+                  <div className="flex-1 min-w-0">
+                    <div className="font-medium text-[11px] truncate">{v.name}</div>
+                    <div className="text-muted-foreground">
+                      {v.shipType}{v.flag ? ` · ${v.flag}` : ""}
+                    </div>
+                  </div>
+                  <div className="text-right flex-shrink-0 pl-2">
+                    <div className="font-mono text-[11px]">{v.distanceNm.toFixed(1)} NM</div>
+                    <div className="text-muted-foreground">{v.speed} kn</div>
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
         )}

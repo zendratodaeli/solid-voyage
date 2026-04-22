@@ -453,6 +453,7 @@ export function NavApiMultiRoutePlanner({
   const [vesselMapPosition, setVesselMapPosition] = useState<{ lat: number; lon: number; name: string; speed: number } | null>(null);
   const [vesselTrail, setVesselTrail] = useState<import("./LiveTrackingPanel").TrailPoint[]>([]);
   const [isLiveTracking, setIsLiveTracking] = useState(false);
+  const [nearbyMapVessels, setNearbyMapVessels] = useState<Array<{ lat: number; lon: number; name: string; speed: number; heading?: number }>>([]);
 
   // Weather-optimized route from Python engine (optional, non-blocking)
   const [weatherRouteOverlay, setWeatherRouteOverlay] = useState<{
@@ -2962,6 +2963,7 @@ export function NavApiMultiRoutePlanner({
           vesselPosition={vesselMapPosition || (aisPosition ? { lat: aisPosition.lat, lon: aisPosition.lng, name: selectedVessel?.name || "Vessel" } : null)}
           vesselTrail={vesselTrail}
           isLiveTracking={isLiveTracking}
+          nearbyVessels={nearbyMapVessels}
         />
 
         {/* ── Map Context Menu (right-click) ── */}
@@ -3772,6 +3774,7 @@ export function NavApiMultiRoutePlanner({
                     routeDistanceNm={result?.summary?.totalDistanceNm}
                     routeResultJson={result}
                     orgSlug={orgSlug}
+                    onNearbyVesselsUpdate={setNearbyMapVessels}
                   />
                 </div>
               )}
