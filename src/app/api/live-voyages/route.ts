@@ -43,29 +43,38 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const session = await prisma.liveVoyageSession.create({
-      data: {
-        organizationId: orgId,
-        createdBy: userId,
-        vesselId,
-        vesselName,
-        vesselType: vesselType || "BULK_CARRIER",
-        vesselDwt: vesselDwt || 50000,
-        vesselSpeed: vesselSpeed || 12.5,
-        vesselMmsi,
-        vesselImo,
-        originPort,
-        destinationPort,
-        routeDistanceNm: routeDistanceNm || 0,
-        etd: etd ? new Date(etd) : null,
-        plannedRouteJson,
-        weatherDataJson,
-        complianceJson,
-        routeIntelJson,
-        aiRecommendation,
-        waypointsJson,
-        status: "active",
-      },
+    const session = await prisma.$transaction(async (tx) => {
+      // Ensure Organization record exists (may not if webhook hasn't fired)
+      await tx.organization.upsert({
+        where: { id: orgId },
+        create: { id: orgId, name: "Organization" },
+        update: {},
+      });
+
+      return tx.liveVoyageSession.create({
+        data: {
+          organizationId: orgId,
+          createdBy: userId,
+          vesselId,
+          vesselName,
+          vesselType: vesselType || "BULK_CARRIER",
+          vesselDwt: vesselDwt || 50000,
+          vesselSpeed: vesselSpeed || 12.5,
+          vesselMmsi: vesselMmsi || null,
+          vesselImo: vesselImo || null,
+          originPort,
+          destinationPort,
+          routeDistanceNm: routeDistanceNm || 0,
+          etd: etd ? new Date(etd) : null,
+          plannedRouteJson: plannedRouteJson || null,
+          weatherDataJson: weatherDataJson || null,
+          complianceJson: complianceJson || null,
+          routeIntelJson: routeIntelJson || null,
+          aiRecommendation: aiRecommendation || null,
+          waypointsJson: waypointsJson || null,
+          status: "active",
+        },
+      });
     });
 
     return NextResponse.json({ success: true, data: session });

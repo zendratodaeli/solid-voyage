@@ -36,6 +36,20 @@ function classifySeverity(waveHeight: number): "calm" | "moderate" | "rough" | "
   return "calm";
 }
 
+/**
+ * Simple land detection — checks if a coordinate is likely on land
+ * by querying the engine's wave_height. If wave_height is exactly 0
+ * or the engine returns no data, it's likely land. We also check
+ * sea_surface_temp: if it's 0°C at low latitudes, it's land fill data.
+ */
+function isLikelyLand(waveHeight: number, seaTemp: number, lat: number): boolean {
+  // If wave height is exactly 0 and sea temp is 0, it's land fill
+  if (waveHeight === 0 && seaTemp === 0) return true;
+  // If at lower latitudes and sea temp is unrealistically 0°C, it's land
+  if (Math.abs(lat) < 60 && seaTemp <= 0 && waveHeight < 0.1) return true;
+  return false;
+}
+
 const SEVERITY_COLORS: Record<string, string> = {
   calm: "#22c55e",
   moderate: "#f59e0b",
@@ -94,6 +108,13 @@ export default function MapWeatherHover() {
       const waveHeight = data.wave_height_m ?? 0;
       const swellHeight = 0; // /conditions doesn't separate swell — use wave_height_m
       const seaTemp = data.sea_surface_temp_c ?? 0;
+
+      // Skip land areas — engine interpolates from nearest ocean grid cell
+      // which gives misleading wave data on inland locations
+      if (isLikelyLand(waveHeight, seaTemp, roundedLat) || data.navigability === 0) {
+        setTooltip(null);
+        return;
+      }
 
       const result: WeatherHoverData = {
         lat: roundedLat,

@@ -221,8 +221,10 @@ export default function LiveTrackingPanel({
   const mockIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [showSaveDialog, setShowSaveDialog] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-  const [nearbyVessels, setNearbyVessels] = useState<Array<{ name: string; shipType: string; speed: number; distanceNm: number; flag?: string }>>([]);
+  const [nearbyVessels, setNearbyVessels] = useState<Array<{ name: string; shipType: string; speed: number; distanceNm: number; flag?: string; lat: number; lon: number; heading?: number }>>([]);
   const nearbyIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Ref to track latest position so intervals can access current coords (avoids stale closure)
+  const latestPosRef = useRef<{ lat: number; lon: number }>({ lat: 0, lon: 0 });
 
   // ── Haversine distance (nm) ──
   const haversineNm = useCallback((lat1: number, lon1: number, lat2: number, lon2: number): number => {
@@ -354,6 +356,7 @@ export default function LiveTrackingPanel({
       const lon = parseCoord(currentLon);
       if (!isNaN(lat) && !isNaN(lon)) {
         addToTrail(lat, lon);
+        latestPosRef.current = { lat, lon };
       }
 
       // Start mock movement along route (every 3 seconds for demo)
@@ -377,6 +380,7 @@ export default function LiveTrackingPanel({
 
         setCurrentLat(jitterLat.toFixed(3));
         setCurrentLon(jitterLon.toFixed(3));
+        latestPosRef.current = { lat: jitterLat, lon: jitterLon };
         addToTrail(jitterLat, jitterLon);
       }, MOCK_INTERVAL_MS);
     }
@@ -406,9 +410,9 @@ export default function LiveTrackingPanel({
     }
 
     const fetchNearby = async () => {
-      const lat = parseCoord(currentLat);
-      const lon = parseCoord(currentLon);
-      if (isNaN(lat) || isNaN(lon)) return;
+      // Use ref for latest position (avoids stale closure from state)
+      const { lat, lon } = latestPosRef.current;
+      if (lat === 0 && lon === 0) return;
       try {
         const res = await fetch(`/api/ais/area?lat=${lat}&lon=${lon}&radius=20`);
         if (res.ok) {
@@ -786,28 +790,49 @@ export default function LiveTrackingPanel({
             onClick={async () => {
               setIsSaving(true);
               try {
+                // Sanitize route data — only save essential parts for replay
+                let sanitizedRoute = null;
+                if (routeResultJson && typeof routeResultJson === "object") {
+                  const r = routeResultJson as Record<string, unknown>;
+                  try {
+                    sanitizedRoute = {
+                      summary: r.summary || {},
+                      legs: Array.isArray(r.legs) 
+                        ? (r.legs as Array<Record<string, unknown>>).map(leg => ({
+                            geometry: leg.geometry || {},
+                            from: leg.from || {},
+                            to: leg.to || {},
+                            distanceNm: leg.distanceNm,
+                          }))
+                        : [],
+                    };
+                  } catch {
+                    sanitizedRoute = null;
+                  }
+                }
+
+                const payload = {
+                  vesselId,
+                  vesselName,
+                  vesselType,
+                  vesselDwt,
+                  vesselSpeed,
+                  originPort: originPort || "Unknown",
+                  destinationPort: destinationPort || "Unknown",
+                  routeDistanceNm: routeDistanceNm || 0,
+                  plannedRouteJson: sanitizedRoute,
+                };
+
                 const res = await fetch("/api/live-voyages", {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    vesselId,
-                    vesselName,
-                    vesselType,
-                    vesselDwt,
-                    vesselSpeed,
-                    vesselMmsi,
-                    vesselImo,
-                    originPort: originPort || "Unknown",
-                    destinationPort: destinationPort || "Unknown",
-                    routeDistanceNm: routeDistanceNm || 0,
-                    plannedRouteJson: routeResultJson,
-                    weatherDataJson,
-                    complianceJson,
-                    routeIntelJson,
-                  }),
+                  body: JSON.stringify(payload),
                 });
 
-                if (!res.ok) throw new Error("Failed to save");
+                if (!res.ok) {
+                  const errBody = await res.json().catch(() => ({ error: "Unknown error" }));
+                  throw new Error(errBody.error || `Server error ${res.status}`);
+                }
                 const data = await res.json();
 
                 if (data.success && data.data?.id) {
@@ -820,7 +845,7 @@ export default function LiveTrackingPanel({
                 }
               } catch (err) {
                 console.error("Save failed:", err);
-                toast.error("Failed to save route");
+                toast.error(`Failed to save route: ${err instanceof Error ? err.message : "Unknown error"}`);
                 // Start without saving anyway
                 setIsLive(true);
               } finally {
