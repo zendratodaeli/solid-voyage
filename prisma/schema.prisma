@@ -208,6 +208,7 @@ model Vessel {
 
   voyages               Voyage[]
   inquiryCandidates     InquiryVesselCandidate[]
+  noonReports           NoonReport[]
 
   @@index([orgId])
 }
@@ -877,6 +878,13 @@ model CargoInquiry {
   notes             String?
   rejectionReason   String?           // Why lost/expired/withdrawn
 
+  // ─── Pre-Calculated Voyage Estimate (from VoyageForm inquiry mode) ──
+  // Stores full calculation output: { vessel, distances, bunkers, TCE, P&L, routeIntelligence }
+  voyageEstimate    Json?
+
+  // ─── Source Email (Phase 2: Inbound Email Inbox) ────
+  inboundEmailId    String?
+
   // ─── Assignment & Audit ─────────────────────────────
   createdBy         String            // Clerk user ID
   createdByName     String?           // Denormalized for display
@@ -912,6 +920,46 @@ model InquiryVesselCandidate {
   @@unique([inquiryId, vesselId])
   @@index([inquiryId])
   @@index([vesselId])
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// INBOUND EMAIL INBOX (Phase 2: Email → Inquiry Pipeline)
+// ═══════════════════════════════════════════════════════════════════
+
+model InboundEmail {
+  id              String   @id @default(cuid())
+  orgId           String
+
+  // Resend email metadata
+  resendEmailId   String   @unique    // Resend's message_id for deduplication
+  from            String              // "John Smith <john@clarksons.com>"
+  to              String[]            // Recipients
+  cc              String[]            // CC recipients
+  subject         String
+  textBody        String?  @db.Text   // Plain text content
+  htmlBody        String?  @db.Text   // HTML content
+
+  // AI classification (gpt-4o-mini)
+  category        String   @default("UNCLASSIFIED")  // CARGO_OFFER | FIXTURE_RECAP | MARKET_UPDATE | OTHER
+  confidence      Float?              // 0-1 AI confidence score
+
+  // AI-parsed cargo data (from parse-fixture, gpt-4o)
+  parsedData      Json?               // Same shape as parse-fixture output
+
+  // Workflow status
+  status          String   @default("NEW")  // NEW | PROCESSING | CONVERTED | DISMISSED | ARCHIVED
+  convertedInquiryId String?          // CargoInquiry ID if converted
+
+  // Audit
+  processedBy     String?             // Clerk user ID who processed it
+  processedAt     DateTime?
+  receivedAt      DateTime @default(now())
+  createdAt       DateTime @default(now())
+  expiresAt       DateTime?           // Auto-cleanup for unconverted emails
+
+  @@index([orgId, status])
+  @@index([orgId, receivedAt])
+  @@index([resendEmailId])
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -1459,4 +1507,66 @@ model NearbyObject {
 
   @@index([sessionId, timestamp])
   @@index([sessionId, distanceNm])
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// NOON REPORTS (Gap 3: Performance Data Collection)
+// ═══════════════════════════════════════════════════════════════════
+
+model NoonReport {
+  id              String   @id @default(cuid())
+  organizationId  String
+  vesselId        String?
+  vessel          Vessel?  @relation(fields: [vesselId], references: [id])
+
+  // Report timestamp & position
+  reportDate      DateTime
+  lat             Float
+  lon             Float
+
+  // Vessel performance
+  speedOverGround Float     // SOG in knots
+  speedThroughWater Float?  // STW in knots (from ship's log)
+  rpm             Float?    // Engine RPM
+  engineLoad      Float?    // Engine load percentage
+  fuelConsumedMT  Float     // Fuel consumed in metric tonnes (24h period)
+  fuelType        String    @default("VLSFO") // VLSFO, HSFO, MGO, LNG
+  avgDraft        Float?    // Average draft in meters
+
+  // Weather observation
+  windForce       Int?      // Beaufort scale 0-12
+  windDirection   Float?    // Degrees
+  seaState        Int?      // Douglas scale 0-9
+  swellHeight     Float?    // Meters
+  currentSpeed    Float?    // Knots
+  currentDirection Float?   // Degrees
+  visibility      String?   // Good, Moderate, Poor
+  pressure        Float?    // hPa
+
+  // Voyage context
+  voyageId        String?   // Optional link to Voyage
+  liveSessionId   String?   // Optional link to LiveVoyageSession
+  portOfDeparture String?
+  nextPort        String?
+  distanceRun     Float?    // NM in last 24h
+  distanceToGo    Float?    // NM remaining
+  eta             DateTime?
+
+  // Cargo details
+  cargoQuantityMT Float?
+  cargoType       String?
+
+  // Engine type (for ML fuel curve training)
+  engineType      String?   // "MAN B&W 6S60ME-C", etc.
+  engineMaker     String?   // "MAN", "Wärtsilä", etc.
+
+  // Audit
+  remarks         String?   @db.Text
+  reportedBy      String?   // Clerk user ID
+  reportedByName  String?   // Name for display
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([organizationId, reportDate])
+  @@index([vesselId, reportDate])
 }

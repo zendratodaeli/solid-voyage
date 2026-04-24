@@ -274,6 +274,99 @@ export async function createCargoInquiry(data: {
 }
 
 // ═══════════════════════════════════════════════════════════════════
+// CREATE INQUIRY FROM VOYAGE FORM (Unified Entry Point)
+// ═══════════════════════════════════════════════════════════════════
+
+/**
+ * Creates a CargoInquiry from the full VoyageForm payload.
+ * Called when VoyageForm is in mode="inquiry" — stores the complete
+ * pre-calculated voyage estimate so it can be hydrated instantly
+ * when dragged onto the Fleet Schedule timeline.
+ */
+export async function createCargoInquiryFromVoyageForm(data: {
+  cargoType: string;
+  cargoQuantityMt: number;
+  stowageFactor?: number;
+  loadPort: string;
+  dischargePort: string;
+  loadPortCountryCode?: string;
+  dischargePortCountryCode?: string;
+  laycanStart?: string;
+  laycanEnd?: string;
+  freightOffered?: number;
+  commissionPercent?: number;
+  brokerName?: string;
+  source?: string;
+  notes?: string;
+  status?: string;
+  voyageEstimate?: Record<string, unknown>; // Full calculation output
+  inboundEmailId?: string; // Phase 2: link to inbound email
+}): Promise<{ success: boolean; data?: CargoInquiryItem; error?: string }> {
+  try {
+    const user = (await requireUser()) as AuthUser;
+    if (!user.activeOrgId) return { success: false, error: "No organization" };
+
+    const cubicCapacityReq = data.stowageFactor
+      ? data.cargoQuantityMt * data.stowageFactor
+      : null;
+
+    const estimatedRevenue = data.freightOffered
+      ? data.freightOffered * data.cargoQuantityMt
+      : null;
+
+    const inquiry = await prisma.cargoInquiry.create({
+      data: {
+        orgId: user.activeOrgId,
+        cargoType: data.cargoType || "Unknown",
+        cargoQuantityMt: data.cargoQuantityMt || 0,
+        stowageFactor: data.stowageFactor || null,
+        cubicCapacityReq,
+        loadPort: data.loadPort || "",
+        dischargePort: data.dischargePort || "",
+        laycanStart: data.laycanStart ? new Date(data.laycanStart) : null,
+        laycanEnd: data.laycanEnd ? new Date(data.laycanEnd) : null,
+        freightOffered: data.freightOffered || null,
+        commissionPercent: data.commissionPercent || null,
+        estimatedRevenue,
+        brokerName: data.brokerName || null,
+        source: data.source || null,
+        notes: data.notes || null,
+        status: data.status === "DRAFT" ? "DRAFT" : "NEW",
+        priority: data.laycanStart ? computeUrgency(new Date(data.laycanStart)) : null,
+        createdBy: user.clerkId,
+        createdByName: user.name || user.email,
+        // Pre-calculated voyage estimate from VoyageForm
+        voyageEstimate: data.voyageEstimate ? (data.voyageEstimate as any) : undefined,
+        // Phase 2: Inbound email link
+        inboundEmailId: data.inboundEmailId || undefined,
+      },
+      include: {
+        vesselCandidates: {
+          include: { vessel: { select: { name: true, vesselType: true, dwt: true } } },
+        },
+      },
+    });
+
+    // Clear dock panel cache
+    try {
+      await triggerCargoUpdated(user.activeOrgId, {
+        inquiryId: inquiry.id,
+        status: inquiry.status,
+        previousStatus: "",
+        voyageId: null,
+      });
+    } catch {
+      // Pusher notification is non-critical
+    }
+
+    return { success: true, data: mapInquiry(inquiry) };
+  } catch (error) {
+    console.error("Failed to create inquiry from VoyageForm:", error);
+    return { success: false, error: "Failed to create inquiry" };
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
 // UPDATE INQUIRY
 // ═══════════════════════════════════════════════════════════════════
 
@@ -1296,6 +1389,66 @@ export async function getActiveInquiriesForFleet(): Promise<{
   }
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// GET VESSELS FOR INQUIRY FORM (VoyageForm mode="inquiry")
+// ═══════════════════════════════════════════════════════════════════
+
+/**
+ * Fetches the vessel list for the VoyageForm in inquiry mode.
+ * Same fields as the voyages/new page server component.
+ */
+export async function getVesselsForInquiry(): Promise<{
+  success: boolean;
+  data?: Array<{
+    id: string;
+    name: string;
+    vesselType: string;
+    dwt: number;
+    ballastFuelType: string | null;
+    ladenFuelType: string | null;
+    portFuelType: string | null;
+    fuelTypes: string[];
+    mmsiNumber: string | null;
+    ladenSpeed: number;
+    ballastSpeed: number;
+    ladenConsumption: number | null;
+    ballastConsumption: number | null;
+    summerDraft: number | null;
+  }>;
+  error?: string;
+}> {
+  try {
+    const user = (await requireUser()) as AuthUser;
+    if (!user.activeOrgId) return { success: false, error: "No organization" };
+
+    const vessels = await prisma.vessel.findMany({
+      where: { orgId: user.activeOrgId },
+      select: {
+        id: true,
+        name: true,
+        vesselType: true,
+        dwt: true,
+        ballastFuelType: true,
+        ladenFuelType: true,
+        portFuelType: true,
+        fuelTypes: true,
+        mmsiNumber: true,
+        ladenSpeed: true,
+        ballastSpeed: true,
+        ladenConsumption: true,
+        ballastConsumption: true,
+        summerDraft: true,
+      },
+      orderBy: { name: "asc" },
+    });
+
+    return { success: true, data: vessels as any };
+  } catch (error) {
+    console.error("Failed to load vessels for inquiry:", error);
+    return { success: false, error: "Failed to load vessels" };
+  }
+}
+
 /**
  * Creates a DRAFT voyage when an inquiry card is dropped onto a vessel row
  * in the Fleet Schedule. Auto-fills vessel defaults, runs the voyage
@@ -1341,18 +1494,20 @@ export async function createDraftVoyageFromDrop(
       ? new Date(inquiry.laycanEnd.getTime() + 14 * 24 * 60 * 60 * 1000)
       : new Date(depDate.getTime() + 21 * 24 * 60 * 60 * 1000);
 
-    // 4. Build voyage data with sensible defaults
-    const freightRate = inquiry.freightCountered || inquiry.freightOffered;
-    const commission = inquiry.commissionPercent || 3.75;
-    const brokerage = 1.25;
-    const bunkerPrice = 550; // Default VLSFO market price
-    const loadPortDays = 2;
-    const dischargePortDays = 2;
+    // 4. Build voyage data — hydrate from voyageEstimate if available
+    const estimate = inquiry.voyageEstimate as Record<string, unknown> | null;
+    const estimatePayload = (estimate?.payload || {}) as Record<string, unknown>;
 
-    // Distances default to 0 (preliminary). Users can update via Route Planner.
-    // For a preliminary TCE estimate, 0 distance = port-cost-only calculation.
-    const ballastDistanceNm = 0;
-    const ladenDistanceNm = 0;
+    const freightRate = (estimatePayload.freightRateUsd as number) || inquiry.freightCountered || inquiry.freightOffered;
+    const commission = (estimatePayload.commissionPercent as number) || inquiry.commissionPercent || 3.75;
+    const brokerage = (estimatePayload.brokeragePercent as number) || 1.25;
+    const bunkerPrice = (estimatePayload.bunkerPriceUsd as number) || 550;
+    const loadPortDays = (estimatePayload.loadPortDays as number) || 2;
+    const dischargePortDays = (estimatePayload.dischargePortDays as number) || 2;
+
+    // If voyageEstimate has real distances from route intelligence, use them
+    const ballastDistanceNm = (estimatePayload.ballastDistanceNm as number) || 0;
+    const ladenDistanceNm = (estimatePayload.ladenDistanceNm as number) || 0;
 
     const voyage = await prisma.voyage.create({
       data: {
@@ -1377,6 +1532,24 @@ export async function createDraftVoyageFromDrop(
         redeliveryPort: inquiry.dischargePort,
         redeliveryDate: estimatedArrival,
         status: "DRAFT",
+        // Hydrate rich data from voyageEstimate if available
+        ...(estimatePayload.voyageLegs ? { voyageLegs: estimatePayload.voyageLegs as object } : {}),
+        ...(estimatePayload.fuelPrices ? { fuelPrices: estimatePayload.fuelPrices as object } : {}),
+        ...(estimatePayload.ladenFuelType ? { ladenFuelType: estimatePayload.ladenFuelType as string } : {}),
+        ...(estimatePayload.ballastFuelType ? { ballastFuelType: estimatePayload.ballastFuelType as string } : {}),
+        ...(estimatePayload.portFuelType ? { portFuelType: estimatePayload.portFuelType as string } : {}),
+        ...(estimatePayload.freightRateUnit ? { freightRateUnit: estimatePayload.freightRateUnit as any } : {}),
+        ...(estimatePayload.waitingDays ? { waitingDays: estimatePayload.waitingDays as number } : {}),
+        ...(estimatePayload.idleDays ? { idleDays: estimatePayload.idleDays as number } : {}),
+        ...(estimatePayload.canalTolls ? { canalTolls: estimatePayload.canalTolls as number } : {}),
+        ...(estimatePayload.additionalCosts ? { additionalCosts: estimatePayload.additionalCosts as number } : {}),
+        ...(estimatePayload.pdaCosts ? { pdaCosts: estimatePayload.pdaCosts as number } : {}),
+        ...(estimatePayload.loadPortCountryCode ? { loadPortCountryCode: estimatePayload.loadPortCountryCode as string } : {}),
+        ...(estimatePayload.dischargePortCountryCode ? { dischargePortCountryCode: estimatePayload.dischargePortCountryCode as string } : {}),
+        ...(estimatePayload.euEtsApplicable != null ? { euEtsApplicable: estimatePayload.euEtsApplicable as boolean } : {}),
+        ...(estimatePayload.euEtsPercentage != null ? { euEtsPercentage: estimatePayload.euEtsPercentage as number } : {}),
+        ...(estimatePayload.laycanStart ? { laycanStart: new Date(estimatePayload.laycanStart as string) } : {}),
+        ...(estimatePayload.laycanEnd ? { laycanEnd: new Date(estimatePayload.laycanEnd as string) } : {}),
       },
     });
 

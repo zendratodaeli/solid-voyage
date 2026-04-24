@@ -1444,3 +1444,78 @@ async def calculate_emissions(
         "vessel_dwt": vessel_dwt,
         "vessel_type": vessel_type,
     }
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  FORECAST VERIFICATION (Gap 5: Hindcast Validation)
+# ═══════════════════════════════════════════════════════════════════
+
+@router.get("/verification/stats")
+async def verification_stats():
+    """
+    Get forecast log statistics — how many predictions have been logged,
+    date range, per-variable summaries.
+    """
+    try:
+        from app.data.forecast_logger import ForecastLogger
+        flog = ForecastLogger.get()
+        return flog.get_stats()
+    except ImportError:
+        return {"status": "unavailable", "message": "ForecastLogger not available"}
+
+
+@router.get("/verification/accuracy")
+async def verification_accuracy():
+    """
+    Get forecast accuracy metrics from hindcast verification.
+    
+    Returns RMSE, MAE, bias for wave height and wind speed,
+    broken down by forecast lead time.
+    
+    Requires ERA5 reanalysis data to have been downloaded.
+    """
+    try:
+        from app.data.hindcast_verifier import compute_verification_metrics, get_latest_report
+        
+        # Try cached report first
+        latest = get_latest_report()
+        if latest and latest.get("status") == "computed":
+            return latest
+        
+        # Compute fresh
+        return compute_verification_metrics()
+    except ImportError:
+        return {"status": "unavailable", "message": "hindcast_verifier not available"}
+    except Exception as e:
+        logger.error(f"Verification computation failed: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+@router.post("/verification/era5-download")
+async def trigger_era5_download():
+    """
+    Trigger ERA5 reanalysis data download for forecast verification.
+    
+    Downloads "what actually happened" weather data from ECMWF ERA5
+    for coordinates that appear in our forecast logs.
+    ERA5 data is available with a ~5 day delay.
+    
+    Requires CDS_API_KEY to be set.
+    """
+    try:
+        from app.data.era5_downloader import download_batch, is_configured
+        
+        if not is_configured():
+            return {
+                "status": "not_configured",
+                "message": "CDS_API_KEY not set. Register at cds.climate.copernicus.eu"
+            }
+        
+        result = download_batch(max_points=50)
+        return result
+    except ImportError:
+        return {"status": "unavailable", "message": "era5_downloader not available"}
+    except Exception as e:
+        logger.error(f"ERA5 download failed: {e}")
+        return {"status": "error", "message": str(e)}
+

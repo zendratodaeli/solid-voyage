@@ -27,6 +27,7 @@ import { VoyageRouteStatus } from "./VoyageRouteStatus";
 import { VoyageAdvisorDialog } from "./VoyageAdvisorDialog";
 import { NavApiPortSearch, type NavApiPort } from "@/components/route-planner/NavApiPortSearch";
 import { getLastPosition } from "@/actions/ais-actions";
+import { createCargoInquiryFromVoyageForm } from "@/actions/cargo-inquiry-actions";
 
 type Vessel = {
   id: string;
@@ -72,10 +73,23 @@ interface VoyageFormProps {
   vessels: Vessel[];
   /** Pass an existing voyage to enable edit mode */
   voyage?: Voyage & { vessel: PrismaVessel };
+  /**
+   * Form mode:
+   * - "voyage" (default) — creates a Voyage record
+   * - "edit" — updates an existing Voyage
+   * - "inquiry" — saves to CargoInquiry with pre-calculated voyageEstimate
+   */
+  mode?: "inquiry" | "voyage" | "edit";
+  /** Callback when inquiry is saved (inquiry mode only) */
+  onInquirySaved?: () => void;
+  /** Callback to close the form (inquiry mode — slide-over) */
+  onClose?: () => void;
 }
 
-export function VoyageForm({ vessels, voyage }: VoyageFormProps) {
-  const isEditMode = !!voyage;
+export function VoyageForm({ vessels, voyage, mode: explicitMode, onInquirySaved, onClose }: VoyageFormProps) {
+  const resolvedMode = explicitMode || (voyage ? "edit" : "voyage");
+  const isEditMode = resolvedMode === "edit";
+  const isInquiryMode = resolvedMode === "inquiry";
 
   // Extract voyageLegs JSON from existing voyage (for edit mode pre-fill)
   const existingLegs = useMemo(() => {
@@ -574,7 +588,7 @@ export function VoyageForm({ vessels, voyage }: VoyageFormProps) {
 
   // Build a fingerprint of all form fields to detect changes
   const autoSaveFingerprint = useMemo(() => {
-    if (!formData.vesselId || isEditMode) return null; // Don't auto-save without vessel or in edit mode
+    if (!formData.vesselId || isEditMode || isInquiryMode) return null; // Don't auto-save without vessel, in edit mode, or inquiry mode
     return JSON.stringify({
       vesselId: formData.vesselId,
       openPort: formData.openPort,
@@ -1460,6 +1474,61 @@ export function VoyageForm({ vessels, voyage }: VoyageFormProps) {
         ...(asDraft ? { status: "DRAFT" } : {}),
       };
 
+      // ── INQUIRY MODE: Save as CargoInquiry instead of Voyage ──
+      if (isInquiryMode) {
+        const inquiryResult = await createCargoInquiryFromVoyageForm({
+          cargoType: formData.cargoType || cargoParcels[0]?.name || "Unknown",
+          cargoQuantityMt: totalCargoOnboard || 0,
+          stowageFactor: formData.stowageFactor ? parseFloat(formData.stowageFactor) : undefined,
+          loadPort: loadPorts.find(p => p.trim()) || "",
+          dischargePort: dischargePorts.filter(p => p.trim()).pop() || "",
+          loadPortCountryCode: loadPortCountries.find(c => c) || undefined,
+          dischargePortCountryCode: [...dischargePortCountries].reverse().find(c => c) || undefined,
+          laycanStart: formData.laycanStart || undefined,
+          laycanEnd: formData.laycanEnd || undefined,
+          freightOffered: payload.freightRateUsd || undefined,
+          commissionPercent: parseFloat(formData.commissionPercent) || undefined,
+          brokerName: undefined, // Can be added later
+          source: undefined,
+          notes: undefined,
+          status: asDraft ? "DRAFT" : "NEW",
+          voyageEstimate: {
+            vesselId: formData.vesselId || undefined,
+            vesselName: selectedVessel?.name,
+            payload, // Full voyage payload for hydration
+            autoRouteResult: autoRouteResult ? {
+              calculatedAt: autoRouteResult.calculatedAt,
+              bestRoute: {
+                totalDistanceNm: autoRouteResult.bestRoute.totalDistanceNm,
+                totalEcaDistanceNm: autoRouteResult.bestRoute.totalEcaDistanceNm,
+                totalHraDistanceNm: autoRouteResult.bestRoute.totalHraDistanceNm,
+                estimatedSeaDays: autoRouteResult.bestRoute.estimatedSeaDays,
+                detectedCanals: autoRouteResult.bestRoute.detectedCanals,
+                ecaZones: autoRouteResult.bestRoute.ecaZones,
+                hraZones: autoRouteResult.bestRoute.hraZones,
+                label: autoRouteResult.bestRoute.label,
+                legs: autoRouteResult.bestRoute.legs,
+              },
+              alternatives: autoRouteResult.alternatives.map(a => ({
+                label: a.label,
+                rank: a.rank,
+                totalDistanceNm: a.totalDistanceNm,
+                estimatedSeaDays: a.estimatedSeaDays,
+              })),
+            } : undefined,
+          },
+        });
+
+        if (inquiryResult.success) {
+          toast.success(asDraft ? "Inquiry saved as draft!" : "Cargo inquiry created!");
+          onInquirySaved?.();
+          onClose?.();
+        } else {
+          throw new Error(inquiryResult.error || "Failed to create inquiry");
+        }
+        return; // Don't continue to voyage creation
+      }
+
       // Branch: PUT for edit or draft-to-final conversion, POST for fresh create
       const draftId = autoSaveDraftId;
       const url = isEditMode
@@ -1598,10 +1667,10 @@ export function VoyageForm({ vessels, voyage }: VoyageFormProps) {
     setFormData((prev) => ({ ...prev, [field]: value }));
   };
 
-  // Check for missing data
+  // Check for missing data — inquiry mode allows empty vessel list
   const hasVessels = vessels && vessels.length > 0;
 
-  if (!hasVessels) {
+  if (!hasVessels && !isInquiryMode) {
     return (
       <div className="flex flex-col items-center justify-center py-8 text-center">
         <AlertCircle className="h-12 w-12 text-amber-500 mb-4" />
@@ -2763,7 +2832,7 @@ export function VoyageForm({ vessels, voyage }: VoyageFormProps) {
           <Button
             type="button"
             variant="outline"
-            onClick={() => router.back()}
+            onClick={() => isInquiryMode && onClose ? onClose() : router.back()}
             disabled={isLoading || isDraftSaving}
           >
             Cancel
@@ -2775,11 +2844,11 @@ export function VoyageForm({ vessels, voyage }: VoyageFormProps) {
             onClick={(e) => handleSubmit(e as any, true)}
           >
             {isDraftSaving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-            Save as Draft
+            {isInquiryMode ? "Save Draft" : "Save as Draft"}
           </Button>
           <Button type="submit" disabled={isLoading || isDraftSaving}>
             {isLoading && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-            {isEditMode ? "Save & Recalculate" : "Create Voyage"}
+            {isInquiryMode ? "Create Inquiry" : isEditMode ? "Save & Recalculate" : "Create Voyage"}
           </Button>
         </div>
       </div>

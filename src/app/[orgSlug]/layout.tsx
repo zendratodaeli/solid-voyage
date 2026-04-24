@@ -27,6 +27,7 @@ import {
   Globe,
   Home,
   Settings,
+  Mail,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -42,6 +43,7 @@ const baseNavItems = [
   { label: "Operations Map", path: "/operations-map", icon: Map },
   { label: "Laytime", path: "/laytime-calculator", icon: Calculator },
   { label: "Market Data", path: "/market-data", icon: TrendingUp },
+  { label: "Inquiry Inbox", path: "/inquiry-inbox", icon: Mail },
   { label: "AI Copilot", path: "/ai-copilot", icon: Sparkles },
 ];
 

@@ -43,6 +43,8 @@ import { InquiryDetail } from "./InquiryDetail";
 import { KanbanBoard } from "./KanbanBoard";
 import { BrokerScorecard } from "./BrokerScorecard";
 import { PipelineAnalytics } from "./PipelineAnalytics";
+import { VoyageForm } from "@/components/voyages/VoyageForm";
+import { getVesselsForInquiry } from "@/actions/cargo-inquiry-actions";
 import { usePusher } from "@/hooks/use-pusher";
 import { toast } from "sonner";
 
@@ -95,18 +97,21 @@ export function CargoBoard() {
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [isPending, startTransition] = useTransition();
   const [showClosed, setShowClosed] = useState(true);
+  const [vessels, setVessels] = useState<any[]>([]);
 
   // ─── Data Loading ───────────────────────────────────────────
   const loadData = useCallback(async () => {
     setLoading(true);
-    const [inquiriesRes, statsRes, fitRes] = await Promise.all([
+    const [inquiriesRes, statsRes, fitRes, vesselsRes] = await Promise.all([
       getCargoInquiries(),
       getInquiryStats(),
       getFleetFitCounts(),
+      getVesselsForInquiry(),
     ]);
     if (inquiriesRes.success && inquiriesRes.data) setInquiries(inquiriesRes.data);
     if (statsRes.success && statsRes.data) setStats(statsRes.data);
     if (fitRes.success && fitRes.data) setFitCounts(fitRes.data);
+    if (vesselsRes.success && vesselsRes.data) setVessels(vesselsRes.data);
     setLoading(false);
   }, []);
 
@@ -472,13 +477,40 @@ export function CargoBoard() {
         />
       )}
 
-      {/* ═══ Create Form Slide-over ═══ */}
+      {/* ═══ Create Inquiry — Full VoyageForm Slide-over ═══ */}
       {showForm && (
-        <InquiryForm
-          inquiry={editingInquiry}
-          onClose={() => { setShowForm(false); setEditingInquiry(null); }}
-          onSaved={handleSaved}
-        />
+        <>
+          {/* Backdrop */}
+          <div
+            className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm"
+            onClick={() => { setShowForm(false); setEditingInquiry(null); }}
+          />
+          {/* Slide-over */}
+          <div className="fixed inset-y-0 right-0 z-50 w-full max-w-4xl bg-background border-l border-border shadow-2xl flex flex-col animate-in slide-in-from-right duration-300 overflow-y-auto">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-border shrink-0">
+              <div>
+                <h2 className="text-lg font-semibold">New Cargo Inquiry</h2>
+                <p className="text-xs text-muted-foreground">
+                  Full voyage calculation — paste an email or fill manually
+                </p>
+              </div>
+              <button
+                onClick={() => { setShowForm(false); setEditingInquiry(null); }}
+                className="h-8 w-8 flex items-center justify-center rounded-md hover:bg-muted transition"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto px-6 py-5">
+              <VoyageForm
+                vessels={vessels}
+                mode="inquiry"
+                onInquirySaved={handleSaved}
+                onClose={() => { setShowForm(false); setEditingInquiry(null); }}
+              />
+            </div>
+          </div>
+        </>
       )}
     </div>
   );
