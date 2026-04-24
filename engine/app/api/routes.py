@@ -1519,3 +1519,25 @@ async def trigger_era5_download():
         logger.error(f"ERA5 download failed: {e}")
         return {"status": "error", "message": str(e)}
 
+
+@router.post("/verification/train-bias")
+async def train_bias_model():
+    """
+    Train ML bias correction model from verified forecast data.
+    
+    Automatically triggered by the daily cron when 100+ matched
+    prediction-observation pairs are available.
+    
+    After training, the BiasCorrector auto-loads the model on next
+    engine restart and applies corrections to all forecasts.
+    """
+    try:
+        from app.ml.bias_trainer import train_bias_model as train
+        result = train(min_samples=100)
+        return result
+    except ImportError:
+        return {"status": "unavailable", "message": "bias_trainer not available"}
+    except Exception as e:
+        logger.error(f"Bias model training failed: {e}")
+        return {"status": "error", "message": str(e)}
+
