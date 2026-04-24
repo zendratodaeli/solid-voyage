@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
+import { Prisma } from "@prisma/client";
 import OpenAI from "openai";
 
 /**
@@ -9,7 +10,8 @@ import OpenAI from "openai";
  * 1. Validates webhook signature (if RESEND_WEBHOOK_SECRET is set)
  * 2. Stores the email in InboundEmail table
  * 3. Runs gpt-4o-mini classification inline (~200ms)
- * 4. Returns 200 immediately
+ * 4. If NOON_REPORT → auto-parses and saves to NoonReport table
+ * 5. Returns 200 immediately
  */
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -72,10 +74,11 @@ async function classifyEmail(subject: string, body: string): Promise<{
 Categories:
 - CARGO_OFFER: Email offering cargo for shipment (fixture inquiry, cargo nomination, voyage offer, freight offer)
 - FIXTURE_RECAP: Confirmation/recap of an agreed fixture or contract terms
+- NOON_REPORT: Daily vessel performance report from a ship (contains position, speed, RPM, fuel consumption, weather observations, draft, distance run/to go, cargo info). Typically sent once per day by the Master or Chief Officer.
 - MARKET_UPDATE: Market reports, freight indices, fleet updates, industry news
 - OTHER: Personal emails, newsletters, spam, non-maritime content
 
-Respond with JSON: { "category": "CARGO_OFFER|FIXTURE_RECAP|MARKET_UPDATE|OTHER", "confidence": 0.0-1.0 }`,
+Respond with JSON: { "category": "CARGO_OFFER|FIXTURE_RECAP|NOON_REPORT|MARKET_UPDATE|OTHER", "confidence": 0.0-1.0 }`,
         },
         {
           role: "user",
@@ -92,6 +95,199 @@ Respond with JSON: { "category": "CARGO_OFFER|FIXTURE_RECAP|MARKET_UPDATE|OTHER"
   } catch (error) {
     console.error("[Webhook] AI classification failed:", error);
     return { category: "UNCLASSIFIED", confidence: 0 };
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// NOON REPORT PARSER (GPT-4o — full extraction)
+// ═══════════════════════════════════════════════════════════════════
+
+interface ParsedNoonReport {
+  vesselName?: string;
+  imoNumber?: string;
+  mmsiNumber?: string;
+  reportDate?: string;          // ISO date
+  lat?: number;
+  lon?: number;
+  speedOverGround?: number;     // knots
+  speedThroughWater?: number;   // knots
+  rpm?: number;
+  engineLoad?: number;          // percentage
+  fuelConsumedMT?: number;      // metric tonnes (24h)
+  fuelType?: string;            // VLSFO, HSFO, MGO, LNG
+  avgDraft?: number;            // meters
+  windForce?: number;           // Beaufort 0-12
+  windDirection?: number;       // degrees
+  seaState?: number;            // Douglas 0-9
+  swellHeight?: number;         // meters
+  currentSpeed?: number;        // knots
+  currentDirection?: number;    // degrees
+  visibility?: string;          // Good, Moderate, Poor
+  pressure?: number;            // hPa
+  portOfDeparture?: string;
+  nextPort?: string;
+  distanceRun?: number;         // NM in last 24h
+  distanceToGo?: number;        // NM remaining
+  eta?: string;                 // ISO datetime
+  cargoQuantityMT?: number;
+  cargoType?: string;
+  engineType?: string;
+  engineMaker?: string;
+  remarks?: string;
+}
+
+async function parseNoonReport(subject: string, body: string): Promise<ParsedNoonReport | null> {
+  try {
+    const response = await openai.chat.completions.create({
+      model: "gpt-4o",
+      response_format: { type: "json_object" },
+      temperature: 0,
+      max_tokens: 1500,
+      messages: [
+        {
+          role: "system",
+          content: `You are a maritime noon report parser. Extract structured data from vessel noon reports.
+
+Noon reports are daily performance summaries sent by ship captains/officers. They typically contain:
+- Vessel name, IMO/MMSI numbers
+- Date/time of report
+- Position (latitude/longitude in various formats: degrees-minutes, decimal degrees, etc.)
+- Speed (SOG and/or STW)
+- Engine RPM and load
+- Fuel consumed in last 24 hours (metric tonnes), fuel type
+- Draft (average, forward, aft)
+- Weather: wind force (Beaufort), sea state (Douglas), swell, pressure, visibility
+- Distance run in last 24h, distance to go, ETA
+- Cargo details (quantity, type)
+- Engine type/maker if mentioned
+- Remarks
+
+Parse the email and extract ALL available fields. For position, convert to decimal degrees (positive = N/E, negative = S/W).
+For date/time, convert to ISO 8601 format (YYYY-MM-DDTHH:mm:ssZ).
+If a field is not found in the email, omit it from the response.
+
+Respond with JSON matching this schema:
+{
+  "vesselName": "string",
+  "imoNumber": "string", 
+  "mmsiNumber": "string",
+  "reportDate": "ISO datetime",
+  "lat": number (decimal degrees),
+  "lon": number (decimal degrees),
+  "speedOverGround": number (knots),
+  "speedThroughWater": number (knots),
+  "rpm": number,
+  "engineLoad": number (percentage),
+  "fuelConsumedMT": number (metric tonnes),
+  "fuelType": "VLSFO|HSFO|MGO|LNG",
+  "avgDraft": number (meters),
+  "windForce": number (Beaufort 0-12),
+  "windDirection": number (degrees),
+  "seaState": number (Douglas 0-9),
+  "swellHeight": number (meters),
+  "currentSpeed": number (knots),
+  "currentDirection": number (degrees),
+  "visibility": "Good|Moderate|Poor",
+  "pressure": number (hPa),
+  "portOfDeparture": "string",
+  "nextPort": "string",
+  "distanceRun": number (NM in last 24h),
+  "distanceToGo": number (NM remaining),
+  "eta": "ISO datetime",
+  "cargoQuantityMT": number,
+  "cargoType": "string",
+  "engineType": "string",
+  "engineMaker": "string",
+  "remarks": "string"
+}`,
+        },
+        {
+          role: "user",
+          content: `Subject: ${subject}\n\nBody:\n${body}`,
+        },
+      ],
+    });
+
+    const parsed = JSON.parse(response.choices[0]?.message?.content || "{}");
+    return parsed as ParsedNoonReport;
+  } catch (error) {
+    console.error("[Webhook] Noon report parsing failed:", error);
+    return null;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// NOON REPORT AUTO-SAVE
+// ═══════════════════════════════════════════════════════════════════
+
+async function autoSaveNoonReport(
+  orgId: string,
+  parsed: ParsedNoonReport,
+  emailId: string,
+  senderEmail: string
+): Promise<string | null> {
+  try {
+    // Try to match vessel by name, IMO, or MMSI
+    let vesselId: string | null = null;
+    if (parsed.imoNumber || parsed.mmsiNumber || parsed.vesselName) {
+      const vessel = await prisma.vessel.findFirst({
+        where: {
+          OR: [
+            ...(parsed.imoNumber ? [{ imoNumber: parsed.imoNumber }] : []),
+            ...(parsed.mmsiNumber ? [{ mmsiNumber: parsed.mmsiNumber }] : []),
+            ...(parsed.vesselName ? [{ name: { contains: parsed.vesselName, mode: "insensitive" as const } }] : []),
+          ],
+        },
+        select: { id: true },
+      });
+      vesselId = vessel?.id || null;
+    }
+
+    // Create noon report
+    const report = await prisma.noonReport.create({
+      data: {
+        organizationId: orgId,
+        vesselId,
+        reportDate: parsed.reportDate ? new Date(parsed.reportDate) : new Date(),
+        lat: parsed.lat || 0,
+        lon: parsed.lon || 0,
+        speedOverGround: parsed.speedOverGround || 0,
+        speedThroughWater: parsed.speedThroughWater || null,
+        rpm: parsed.rpm || null,
+        engineLoad: parsed.engineLoad || null,
+        fuelConsumedMT: parsed.fuelConsumedMT || 0,
+        fuelType: parsed.fuelType || "VLSFO",
+        avgDraft: parsed.avgDraft || null,
+        windForce: parsed.windForce != null ? parsed.windForce : null,
+        windDirection: parsed.windDirection || null,
+        seaState: parsed.seaState != null ? parsed.seaState : null,
+        swellHeight: parsed.swellHeight || null,
+        currentSpeed: parsed.currentSpeed || null,
+        currentDirection: parsed.currentDirection || null,
+        visibility: parsed.visibility || null,
+        pressure: parsed.pressure || null,
+        portOfDeparture: parsed.portOfDeparture || null,
+        nextPort: parsed.nextPort || null,
+        distanceRun: parsed.distanceRun || null,
+        distanceToGo: parsed.distanceToGo || null,
+        eta: parsed.eta ? new Date(parsed.eta) : null,
+        cargoQuantityMT: parsed.cargoQuantityMT || null,
+        cargoType: parsed.cargoType || null,
+        engineType: parsed.engineType || null,
+        engineMaker: parsed.engineMaker || null,
+        remarks: parsed.remarks || null,
+        reportedByName: senderEmail,
+      },
+    });
+
+    console.log(
+      `[Webhook] Auto-saved noon report: ${report.id} | Vessel: ${parsed.vesselName || "Unknown"} | Pos: ${parsed.lat?.toFixed(2)},${parsed.lon?.toFixed(2)}`
+    );
+
+    return report.id;
+  } catch (error) {
+    console.error("[Webhook] Failed to auto-save noon report:", error);
+    return null;
   }
 }
 
@@ -116,8 +312,8 @@ async function resolveOrgFromRecipient(recipients: string[]): Promise<string | n
     const emailMatch = recipient.match(/<([^>]+)>/) || [null, recipient];
     const email = (emailMatch[1] || recipient).toLowerCase().trim();
     
-    // Pattern: inquiries-{orgId}@domain
-    const orgMatch = email.match(/^inquiries-([a-z0-9_-]+)@/i);
+    // Pattern: inquiries-{orgId}@domain or noonreport-{orgId}@domain
+    const orgMatch = email.match(/^(?:inquiries|noonreport|reports)-([a-z0-9_-]+)@/i);
     if (orgMatch) {
       // Verify org exists
       const org = await prisma.organization.findFirst({
@@ -225,6 +421,49 @@ export async function POST(req: NextRequest) {
       `[Webhook] Stored email: ${inboundEmail.id} | From: ${from} | Category: ${classification.category} (${(classification.confidence * 100).toFixed(0)}%)`
     );
 
+    // ═══════════════════════════════════════════════════════════════
+    // AUTO-PROCESS: NOON REPORT → Parse + Save automatically
+    // ═══════════════════════════════════════════════════════════════
+    if (classification.category === "NOON_REPORT" && classification.confidence >= 0.7) {
+      try {
+        // Parse noon report with GPT-4o (full extraction)
+        const parsed = await parseNoonReport(subject, textBody || subject);
+
+        if (parsed && (parsed.lat || parsed.speedOverGround || parsed.fuelConsumedMT)) {
+          // Auto-save to NoonReport table
+          const reportId = await autoSaveNoonReport(orgId, parsed, inboundEmail.id, from);
+
+          // Update email status
+          await prisma.inboundEmail.update({
+            where: { id: inboundEmail.id },
+            data: {
+              parsedData: parsed as unknown as Prisma.InputJsonValue,
+              status: reportId ? "CONVERTED" : "PROCESSING",
+              convertedInquiryId: reportId, // Reuse field to link to noon report
+              processedAt: new Date(),
+            },
+          });
+
+          console.log(
+            `[Webhook] ✅ Auto-saved noon report: ${reportId} from ${from}`
+          );
+        } else {
+          // Store parsed data but couldn't auto-save (missing required fields)
+          await prisma.inboundEmail.update({
+            where: { id: inboundEmail.id },
+            data: {
+              parsedData: (parsed ?? undefined) as unknown as Prisma.InputJsonValue,
+              status: "PROCESSING",
+            },
+          });
+          console.warn("[Webhook] Noon report parsed but missing required fields — needs manual review");
+        }
+      } catch (error) {
+        console.error("[Webhook] Noon report auto-processing failed:", error);
+        // Don't block — the email is already stored for manual processing
+      }
+    }
+
     return NextResponse.json({
       success: true,
       id: inboundEmail.id,
@@ -243,6 +482,7 @@ export async function GET() {
   return NextResponse.json({
     status: "ok",
     endpoint: "resend-inbound-webhook",
+    categories: ["CARGO_OFFER", "FIXTURE_RECAP", "NOON_REPORT", "MARKET_UPDATE", "OTHER"],
     timestamp: new Date().toISOString(),
   });
 }
